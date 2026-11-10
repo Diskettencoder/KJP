@@ -39,10 +39,8 @@
   <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <!-- SVG Logo in the top-left corner -->
-        <div class="h-11 px-2 rounded-xl bg-white border border-slate-200 flex items-center justify-center shadow-2xs">
-          <img id="headerSvgLogo" src="./logo.svg" alt="KJP Logo" class="h-8 w-auto object-contain" />
-        </div>
+        <!-- SVG Logo in the top-left corner (without frame/border) -->
+        <img id="headerSvgLogo" src="./logo.svg" alt="KJP Logo" class="h-9 w-auto object-contain shrink-0" />
         <div>
           <h1 class="font-bold text-slate-900 text-base sm:text-lg leading-tight">KJP Verlag · Rechnungs-Automatik</h1>
           <p class="text-xs text-slate-500">Bestellbeleg reinziehen → Fertige PDF-Rechnung wird sofort heruntergeladen</p>
@@ -254,6 +252,7 @@
         ]
       },
       customLogoDataUrl: null,
+      logoAspectRatio: 360 / 160, // width / height ratio to prevent distortion in PDF
       // STRICT PRIVACY: Stores ONLY { hash, invoiceNumber, numericNo }
       hashRegistry: new Map(),
       currentInvoice: null,
@@ -274,24 +273,67 @@
     </svg>`;
 
     /**
-     * Converts raw SVG markup into a high-resolution PNG DataURL via Canvas so that
-     * both the HTML preview and jsPDF.addImage() render the vector graphic crisply.
+     * Converts raw SVG markup into a high-resolution PNG DataURL via Canvas while
+     * strictly preserving the intrinsic SVG aspect ratio (from viewBox or width/height)
+     * so neither the canvas nor jsPDF.addImage() ever stretches the logo.
      */
     function rasterizeSvgToDataUrl(svgText) {
       return new Promise((resolve, reject) => {
-        const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+        let intrinsicWidth = 0;
+        let intrinsicHeight = 0;
+        let normalizedSvgText = svgText;
+
+        try {
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(svgText, 'image/svg+xml');
+          const svgEl = xmlDoc.querySelector('svg');
+          if (svgEl) {
+            const viewBoxAttr = svgEl.getAttribute('viewBox');
+            if (viewBoxAttr) {
+              const parts = viewBoxAttr.trim().split(/[\s,]+/).map(Number);
+              if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+                intrinsicWidth = parts[2];
+                intrinsicHeight = parts[3];
+              }
+            }
+            if (!intrinsicWidth || !intrinsicHeight) {
+              const wAttr = parseFloat(svgEl.getAttribute('width') || '0');
+              const hAttr = parseFloat(svgEl.getAttribute('height') || '0');
+              if (wAttr > 0 && hAttr > 0) {
+                intrinsicWidth = wAttr;
+                intrinsicHeight = hAttr;
+              }
+            }
+            // Ensure explicit pixel width/height match the intrinsic ratio so browser Image() rendering never stretches
+            if (intrinsicWidth > 0 && intrinsicHeight > 0) {
+              svgEl.setAttribute('width', String(intrinsicWidth));
+              svgEl.setAttribute('height', String(intrinsicHeight));
+              normalizedSvgText = new XMLSerializer().serializeToString(svgEl);
+            }
+          }
+        } catch (_) {
+          // Fallback to natural image dimensions if XML parsing fails
+        }
+
+        const svgBlob = new Blob([normalizedSvgText], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(svgBlob);
         const img = new Image();
         img.onload = () => {
+          const w = intrinsicWidth || img.naturalWidth || 360;
+          const h = intrinsicHeight || img.naturalHeight || 160;
+          const widthToHeightRatio = w / h;
+
           const canvas = document.createElement('canvas');
-          const targetWidth = 720;
-          const aspect = (img.naturalHeight && img.naturalWidth) ? (img.naturalHeight / img.naturalWidth) : (160 / 360);
+          const targetWidth = 800;
           canvas.width = targetWidth;
-          canvas.height = Math.round(targetWidth * aspect) || 320;
+          canvas.height = Math.max(1, Math.round(targetWidth / widthToHeightRatio));
+
           const ctx = canvas.getContext('2d');
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           URL.revokeObjectURL(url);
+
+          state.logoAspectRatio = widthToHeightRatio;
           resolve(canvas.toDataURL('image/png'));
         };
         img.onerror = (err) => {
@@ -733,13 +775,13 @@
         }
       }
 
-      // 2. Extract Order Date (2026/11/10 -> 10.11.2026) and fallback customer name
-      let deliveryDate = formatDateDE(new Date());
+      // 2. Extract Order Date (Bestelldatum: e.g. 2026/11/10 -> 10.11.2026) and fallback customer name
+      let orderDate = formatDateDE(new Date());
       let headerCustomerName = '';
       for (const line of cleanLines) {
         const dm = line.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})(?:\s+\d{2}:\d{2}:\d{2})?\s*(.*)/);
         if (dm) {
-          deliveryDate = `${dm[3]}.${dm[2]}.${dm[1]}`;
+          orderDate = `${dm[3]}.${dm[2]}.${dm[1]}`;
           if (dm[4] && dm[4].trim().length > 2) {
             headerCustomerName = dm[4].trim();
           }
@@ -894,14 +936,11 @@
         }
       }
 
-      const customerNo = String(1050 + (parseInt(orderNo, 10) || 1));
-
       return {
         orderNo,
-        customerNo,
         customerName: addressLines[0] || headerCustomerName || 'Kunde',
         addressLines,
-        deliveryDate,
+        orderDate,
         invoiceDate: formatDateDE(new Date()),
         items,
         subtotalGross: itemsSubtotal,
@@ -1132,11 +1171,8 @@
                 <span class="text-slate-600">Rechnungsdatum</span>
                 <span class="text-right">${model.invoiceDate}</span>
 
-                <span class="text-slate-600">Lieferdatum</span>
-                <span class="text-right">${model.deliveryDate}</span>
-
-                <span class="text-slate-600">Ihre Kundennummer</span>
-                <span class="text-right">${model.customerNo}</span>
+                <span class="text-slate-600">Bestelldatum</span>
+                <span class="text-right">${model.orderDate}</span>
 
                 <span class="text-slate-600">Ihr Ansprechpartner</span>
                 <span class="text-right">${p.contactPerson}</span>
@@ -1231,10 +1267,23 @@
       const rightMargin = 190;
       const contentWidth = rightMargin - leftMargin;
 
-      // 1. Logo (top right)
+      // 1. Logo (top right, preserving exact SVG aspect ratio without distortion)
       if (state.customLogoDataUrl) {
         try {
-          doc.addImage(state.customLogoDataUrl, 'PNG', 152, 14, 36, 16);
+          const ratio = state.logoAspectRatio || (360 / 160); // width / height
+          const maxLogoWidth = 38;
+          const maxLogoHeight = 16;
+
+          let logoW = maxLogoHeight * ratio;
+          let logoH = maxLogoHeight;
+
+          if (logoW > maxLogoWidth) {
+            logoW = maxLogoWidth;
+            logoH = logoW / ratio;
+          }
+
+          const logoX = rightMargin - logoW;
+          doc.addImage(state.customLogoDataUrl, 'PNG', logoX, 14, logoW, logoH);
         } catch (_) {
           doc.setFont('helvetica', 'bold');
           doc.setFontSize(22);
@@ -1267,8 +1316,7 @@
       const metaPairs = [
         ['Rechnungs-Nr.', model.invoiceNumber],
         ['Rechnungsdatum', model.invoiceDate],
-        ['Lieferdatum', model.deliveryDate],
-        ['Ihre Kundennummer', model.customerNo],
+        ['Bestelldatum', model.orderDate],
         ['Ihr Ansprechpartner', p.contactPerson]
       ];
       doc.setFontSize(9);
