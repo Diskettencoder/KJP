@@ -39,9 +39,9 @@
   <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <!-- Built-in KJP Fallback SVG Logo -->
-        <div class="w-11 h-11 rounded-xl bg-slate-900 flex items-center justify-center text-white font-bold text-lg tracking-tight shadow-sm">
-          <span class="text-sky-400">k</span><span class="text-amber-400">j</span><span class="text-emerald-400">p</span>
+        <!-- SVG Logo in the top-left corner -->
+        <div class="h-11 px-2 rounded-xl bg-white border border-slate-200 flex items-center justify-center shadow-2xs">
+          <img id="headerSvgLogo" src="./logo.svg" alt="KJP Logo" class="h-8 w-auto object-contain" />
         </div>
         <div>
           <h1 class="font-bold text-slate-900 text-base sm:text-lg leading-tight">KJP Verlag · Rechnungs-Automatik</h1>
@@ -53,7 +53,7 @@
         <!-- Next Invoice Counter Pill (Read-Only) -->
         <div class="bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
           <span class="text-xs font-medium text-slate-500">Nächste Nr.:</span>
-          <span id="nextInvoiceBadge" class="text-sm font-bold text-slate-900 font-mono">RE-1068</span>
+          <span id="nextInvoiceBadge" class="text-sm font-bold text-slate-900 font-mono">RE-0001</span>
         </div>
       </div>
     </div>
@@ -213,7 +213,12 @@
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
 
-    const LOCAL_STORAGE_KEY = 'kjp_hash_registry_v2';
+    const LOCAL_STORAGE_KEY = 'kjp_hash_registry_v3';
+
+    // Helper to format invoice numbers with 4-digit leading zeros (e.g. RE-0001)
+    function formatInvoiceNo(prefix, num) {
+      return `${prefix}${String(num).padStart(4, '0')}`;
+    }
 
     // =========================================================================
     // 1. STATIC PRESETS (UPDATED WITH NEW KJP VERLAG DETAILS & NO BANK ACCOUNT)
@@ -221,7 +226,7 @@
     const state = {
       presets: {
         prefix: 'RE-',
-        nextNumber: 1068, // Starts right after RE-1067.pdf
+        nextNumber: 1, // Starts at RE-0001
         senderLine: 'KJP Verlag   Georg-Cantor-Str. 30   06108 Halle (Saale)',
         contactPerson: 'Sabine Ahrens-Eipper',
         introLines: [
@@ -298,6 +303,7 @@
     }
 
     async function initLogo() {
+      const headerImg = document.getElementById('headerSvgLogo');
       // Automatically load ./logo.svg from the GitHub repository folder
       try {
         const response = await fetch('./logo.svg');
@@ -305,6 +311,7 @@
           const svgText = await response.text();
           if (svgText.includes('<svg')) {
             state.customLogoDataUrl = await rasterizeSvgToDataUrl(svgText);
+            if (headerImg) headerImg.src = state.customLogoDataUrl;
             renderInvoicePreview();
             return;
           }
@@ -314,6 +321,7 @@
       }
       try {
         state.customLogoDataUrl = await rasterizeSvgToDataUrl(FALLBACK_SVG_MARKUP);
+        if (headerImg) headerImg.src = state.customLogoDataUrl;
       } catch (_) {
         state.customLogoDataUrl = null;
       }
@@ -964,7 +972,7 @@
       } else {
         // NEW RECEIPT -> Assign next chronological invoice number
         assignedNumericNo = state.presets.nextNumber;
-        assignedInvoiceNo = `${state.presets.prefix}${assignedNumericNo}`;
+        assignedInvoiceNo = formatInvoiceNo(state.presets.prefix, assignedNumericNo);
         state.presets.nextNumber = assignedNumericNo + 1;
 
         // STRICT PRIVACY: Only log hash and invoiceNumber!
@@ -1406,7 +1414,7 @@
     function updateCounterUI() {
       const badge = document.getElementById('nextInvoiceBadge');
       if (badge) {
-        badge.textContent = `${state.presets.prefix}${state.presets.nextNumber}`;
+        badge.textContent = formatInvoiceNo(state.presets.prefix, state.presets.nextNumber);
       }
     }
 
