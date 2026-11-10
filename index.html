@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KJP Verlag – Beleg zu Rechnung Konverter</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- PDF.js for client-side PDF parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- jsPDF for client-side PDF invoice generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .drop-zone-active {
+      border-color: #2563eb !important;
+      background-color: #eff6ff !important;
+      transform: scale(1.01);
+    }
+    /* Custom A4 Aspect Ratio Paper Preview */
+    .a4-preview {
+      aspect-ratio: 210 / 297;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- Top Header -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <!-- Built-in KJP Fallback SVG Logo -->
+        <div class="w-11 h-11 rounded-xl bg-slate-900 flex items-center justify-center text-white font-bold text-lg tracking-tight shadow-sm">
+          <span class="text-sky-400">k</span><span class="text-amber-400">j</span><span class="text-emerald-400">p</span>
+        </div>
+        <div>
+          <h1 class="font-bold text-slate-900 text-base sm:text-lg leading-tight">KJP Verlag · Rechnungs-Automatik</h1>
+          <p class="text-xs text-slate-500">Bestellbeleg reinziehen → Fertige PDF-Rechnung wird sofort heruntergeladen</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- Next Invoice Counter Pill (Read-Only) -->
+        <div class="bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <span class="text-xs font-medium text-slate-500">Nächste Nr.:</span>
+          <span id="nextInvoiceBadge" class="text-sm font-bold text-slate-900 font-mono">RE-1068</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification Banner Area (No browser alerts!) -->
+  <div id="bannerContainer" class="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-4 empty:pt-0"></div>
+
+  <!-- Main Workspace -->
+  <main class="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+    <!-- Left Column: Drag & Drop Only (5 cols) -->
+    <div class="lg:col-span-5 flex flex-col gap-6 lg:sticky lg:top-22">
+
+      <!-- Idiot-proof Drag & Drop Card -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="file-up" class="w-4 h-4 text-blue-600"></i>
+            Beleg (PDF) hier reinziehen
+          </h2>
+          <label class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 cursor-pointer select-none">
+            <input type="checkbox" id="autoDownloadToggle" checked class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+            Sofort-Download
+          </label>
+        </div>
+
+        <!-- Drop Zone -->
+        <div id="dropZone" class="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-2xl p-10 text-center transition-all duration-200 cursor-pointer bg-slate-50/70 hover:bg-blue-50/40 group">
+          <input type="file" id="fileInput" accept="application/pdf" multiple class="hidden" />
+          <div class="w-16 h-16 rounded-2xl bg-blue-100/80 text-blue-600 mx-auto flex items-center justify-center mb-4 group-hover:scale-105 transition-transform">
+            <i data-lucide="upload-cloud" class="w-8 h-8"></i>
+          </div>
+          <p class="text-base font-semibold text-slate-800 mb-1">
+            Beleg-PDF hierher ziehen
+          </p>
+          <p class="text-xs text-slate-500 mb-5">
+            oder klicken zum Auswählen (Rechnung wird automatisch erstellt)
+          </p>
+          <div class="inline-flex items-center gap-2 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-3.5 py-1">
+            <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+            100% Lokal im Browser · Keine PDF wird hochgeladen
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Column: A4 Visual Preview (7 cols) -->
+    <div class="lg:col-span-7 flex flex-col gap-6">
+
+      <!-- Empty State (Shown until a PDF is dropped) -->
+      <div id="emptyPreviewState" class="bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center flex flex-col items-center justify-center min-h-[420px]">
+        <div class="w-14 h-14 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mb-4">
+          <i data-lucide="file-text" class="w-7 h-7"></i>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Noch kein Beleg geladen</h3>
+        <p class="text-xs text-slate-500 max-w-xs">
+          Ziehe links einen Bestellbeleg (PDF) in das Feld, um die Rechnung zu generieren und hier als Vorschau anzuzeigen.
+        </p>
+      </div>
+
+      <!-- Active Preview Container (Hidden until a PDF is dropped) -->
+      <div id="activePreviewContainer" class="hidden flex-col gap-6">
+        <!-- Quick Action Bar -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5">
+            <div id="statusDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
+            <div>
+              <span id="currentDocTitle" class="text-sm font-semibold text-slate-900">Vorschau</span>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button id="downloadCurrentPdfBtn" class="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-sm transition">
+              <i data-lucide="file-down" class="w-4 h-4"></i>
+              <span>PDF-Rechnung herunterladen</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Visual A4 Invoice Sheet Preview -->
+        <div class="bg-slate-200/70 rounded-2xl p-4 sm:p-8 flex justify-center overflow-x-auto">
+          <div id="invoicePreviewSheet" class="a4-preview bg-white w-full max-w-[680px] text-slate-900 p-8 sm:p-12 flex flex-col justify-between text-[11px] leading-relaxed relative rounded-sm border border-slate-300">
+            <!-- Rendered dynamically after a PDF is dropped -->
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Fallback Tax Selection Pop-up Modal (ONLY shown automatically when 7% vs 19% equation fails/is ambiguous) -->
+  <div id="taxFallbackModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200 p-6 space-y-5">
+      <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+            <i data-lucide="help-circle" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Steuersatz (7% vs. 19%) kurz bestätigen</h3>
+            <p id="taxModalReasonText" class="text-xs text-slate-600 mt-0.5">
+              Bei diesem Beleg ist die mathematische Aufteilung zwischen 7% und 19% nicht eindeutig. Bitte wähle kurz für jede Position den passenden Steuersatz.
+            </p>
+          </div>
+        </div>
+        <button id="closeTaxModalBtn" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Dynamic Item List for Tax Selection -->
+      <div id="taxModalItemsContainer" class="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+        <!-- Populated dynamically -->
+      </div>
+
+      <!-- Shipping Tax Rate Option -->
+      <div class="bg-slate-50 rounded-xl p-3 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span class="font-medium text-slate-700">Versandkosten-Steuersatz laut Shop:</span>
+        <div class="flex items-center gap-1.5" id="taxModalShipRateGroup">
+          <button type="button" data-ship-rate="0" class="ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition">0% (wie im Beleg)</button>
+          <button type="button" data-ship-rate="0.07" class="ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition">7%</button>
+          <button type="button" data-ship-rate="0.19" class="ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition">19%</button>
+        </div>
+      </div>
+
+      <!-- Live Tax Comparison Summary -->
+      <div class="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 flex items-center justify-between text-xs">
+        <div>
+          <div class="text-slate-600">Steuer laut Beleg: <strong id="taxModalTargetTax" class="text-slate-900">0,00 €</strong></div>
+          <div id="taxModalSplitPreview" class="text-[11px] text-slate-500 mt-0.5">7% USt.: 0,00 € · 19% USt.: 0,00 €</div>
+        </div>
+        <div class="text-right">
+          <div class="text-slate-600">Aktuelle Auswahl: <strong id="taxModalCurrentTax" class="text-blue-700">0,00 €</strong></div>
+          <div id="taxModalMatchBadge" class="text-[11px] font-semibold mt-0.5"></div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+        <button id="applyTaxModalBtn" class="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-2">
+          <i data-lucide="check" class="w-4 h-4"></i>
+          <span>Übernehmen & PDF-Rechnung herunterladen</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Logic (100% Local PDF Processing + Privacy-First Hash Logging) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Configure PDF.js worker for 100% client-side in-browser parsing
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+
+    const LOCAL_STORAGE_KEY = 'kjp_hash_registry_v2';
+
+    // =========================================================================
+    // 1. STATIC PRESETS (UPDATED WITH NEW KJP VERLAG DETAILS & NO BANK ACCOUNT)
+    // =========================================================================
+    const state = {
+      presets: {
+        prefix: 'RE-',
+        nextNumber: 1068, // Starts right after RE-1067.pdf
+        senderLine: 'KJP Verlag   Georg-Cantor-Str. 30   06108 Halle (Saale)',
+        contactPerson: 'Sabine Ahrens-Eipper',
+        introLines: [
+          'Sehr geehrte Damen und Herren,',
+          'vielen Dank für Ihren Auftrag und das damit verbundene Vertrauen!',
+          'Hiermit stelle ich Ihnen die folgenden Leistungen in Rechnung:'
+        ],
+        paymentNote: 'Wir haben Ihre Zahlung dankend erhalten.',
+        footerCol1: [
+          'KJP Verlag',
+          'Sabine Ahrens-Eipper',
+          'Georg-Cantor-Str. 30',
+          '06108 Halle (Saale)',
+          'Deutschland'
+        ],
+        footerCol2: [
+          'Telefon: +49 345 5216714',
+          'E-Mail: kjpverlag@gmx.de',
+          'Webseite: https://kjp-verlag.de/'
+        ],
+        footerCol3: [
+          'Steuernummer: 110/174/96303',
+          'USt.-IdNr.: DE286801114',
+          'Inhaberin: Sabine Ahrens-Eipper'
+        ]
+      },
+      customLogoDataUrl: null,
+      // STRICT PRIVACY: Stores ONLY { hash, invoiceNumber, numericNo }
+      hashRegistry: new Map(),
+      currentInvoice: null,
+      db: null,
+      user: null,
+      appId: typeof __app_id !== 'undefined' ? __app_id : 'kjp-invoice-converter'
+    };
+
+    // =========================================================================
+    // 2. SVG LOGO LOADER (Expects ./logo.svg in the repository folder)
+    // =========================================================================
+    const FALLBACK_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 160" width="360" height="160">
+      <rect x="215" y="18" width="22" height="22" rx="4" fill="#f59e0b"/>
+      <rect x="243" y="26" width="22" height="22" rx="4" fill="#10b981"/>
+      <rect x="271" y="18" width="22" height="22" rx="4" fill="#0ea5e9"/>
+      <rect x="299" y="26" width="22" height="22" rx="4" fill="#ec4899"/>
+      <text x="195" y="125" font-family="Inter, Arial, sans-serif" font-weight="bold" font-size="92" fill="#1e293b">kjp</text>
+    </svg>`;
+
+    /**
+     * Converts raw SVG markup into a high-resolution PNG DataURL via Canvas so that
+     * both the HTML preview and jsPDF.addImage() render the vector graphic crisply.
+     */
+    function rasterizeSvgToDataUrl(svgText) {
+      return new Promise((resolve, reject) => {
+        const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(svgBlob);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const targetWidth = 720;
+          const aspect = (img.naturalHeight && img.naturalWidth) ? (img.naturalHeight / img.naturalWidth) : (160 / 360);
+          canvas.width = targetWidth;
+          canvas.height = Math.round(targetWidth * aspect) || 320;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = (err) => {
+          URL.revokeObjectURL(url);
+          reject(err);
+        };
+        img.src = url;
+      });
+    }
+
+    async function initLogo() {
+      // Automatically load ./logo.svg from the GitHub repository folder
+      try {
+        const response = await fetch('./logo.svg');
+        if (response.ok) {
+          const svgText = await response.text();
+          if (svgText.includes('<svg')) {
+            state.customLogoDataUrl = await rasterizeSvgToDataUrl(svgText);
+            renderInvoicePreview();
+            return;
+          }
+        }
+      } catch (_) {
+        // Fallback if ./logo.svg is not yet present in the directory
+      }
+      try {
+        state.customLogoDataUrl = await rasterizeSvgToDataUrl(FALLBACK_SVG_MARKUP);
+      } catch (_) {
+        state.customLogoDataUrl = null;
+      }
+    }
+
+    // =========================================================================
+    // 3. PRIVACY-FIRST REGISTRY (ONLY HASH <-> INVOICE NUMBER, ZERO CUSTOMER DATA)
+    // =========================================================================
+    function loadLocalRegistry() {
+      try {
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        let maxNumeric = state.presets.nextNumber - 1;
+        if (Array.isArray(parsed.entries)) {
+          for (const item of parsed.entries) {
+            if (item && item.hash && item.invoiceNumber) {
+              // Strictly keep ONLY hash, invoiceNumber, numericNo
+              const sanitized = {
+                hash: String(item.hash),
+                invoiceNumber: String(item.invoiceNumber),
+                numericNo: Number(item.numericNo) || 0
+              };
+              state.hashRegistry.set(sanitized.hash, sanitized);
+              if (sanitized.numericNo > maxNumeric) {
+                maxNumeric = sanitized.numericNo;
+              }
+            }
+          }
+        }
+        if (maxNumeric >= state.presets.nextNumber) {
+          state.presets.nextNumber = maxNumeric + 1;
+        }
+      } catch (e) {
+        console.warn('Local registry read info:', e);
+      }
+    }
+
+    function persistLocalRegistry() {
+      try {
+        const payload = {
+          prefix: state.presets.prefix,
+          nextNumber: state.presets.nextNumber,
+          entries: Array.from(state.hashRegistry.values()).map(e => ({
+            hash: e.hash,
+            invoiceNumber: e.invoiceNumber,
+            numericNo: e.numericNo
+          }))
+        };
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.warn('Local registry write info:', e);
+      }
+    }
+
+    async function initStorage() {
+      loadLocalRegistry();
+      updateCounterUI();
+
+      try {
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+          const firebaseConfig = JSON.parse(__firebase_config);
+          const app = initializeApp(firebaseConfig);
+          const auth = getAuth(app);
+          const db = getFirestore(app);
+          state.db = db;
+
+          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            await signInWithCustomToken(auth, __initial_auth_token);
+          } else {
+            await signInAnonymously(auth);
+          }
+
+          onAuthStateChanged(auth, (user) => {
+            state.user = user;
+            if (!user) return;
+
+            const colRef = collection(db, 'artifacts', state.appId, 'users', user.uid, 'invoice_hashes');
+            onSnapshot(colRef, (snapshot) => {
+              let maxNumeric = state.presets.nextNumber - 1;
+              snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                if (data && data.hash && data.invoiceNumber) {
+                  // Strictly store ONLY hash, invoiceNumber, numericNo
+                  const minimalEntry = {
+                    hash: String(data.hash),
+                    invoiceNumber: String(data.invoiceNumber),
+                    numericNo: Number(data.numericNo) || 0
+                  };
+                  state.hashRegistry.set(minimalEntry.hash, minimalEntry);
+                  if (minimalEntry.numericNo > maxNumeric) {
+                    maxNumeric = minimalEntry.numericNo;
+                  }
+                }
+              });
+              state.presets.nextNumber = maxNumeric + 1;
+              persistLocalRegistry();
+              updateCounterUI();
+            }, (err) => {
+              console.warn('Firestore sync info:', err);
+            });
+          });
+        }
+      } catch (e) {
+        console.warn('Running in standalone GitHub Pages mode:', e);
+      }
+    }
+
+    async function saveHashMapping(entry) {
+      // Strictly strip everything except hash, invoiceNumber, numericNo
+      const minimalEntry = {
+        hash: String(entry.hash),
+        invoiceNumber: String(entry.invoiceNumber),
+        numericNo: Number(entry.numericNo)
+      };
+
+      state.hashRegistry.set(minimalEntry.hash, minimalEntry);
+      persistLocalRegistry();
+      updateCounterUI();
+
+      if (state.db && state.user) {
+        try {
+          const docRef = doc(state.db, 'artifacts', state.appId, 'users', state.user.uid, 'invoice_hashes', minimalEntry.hash);
+          await setDoc(docRef, minimalEntry);
+        } catch (e) {
+          console.warn('Could not persist hash entry to cloud:', e);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 4. CONTENT-ONLY SHA-256 HASHING (IGNORES FILENAME & PDF METADATA)
+    // =========================================================================
+    async function computeContentHash(normalizedTextTokens) {
+      // Join only the visible text content tokens extracted from the PDF pages,
+      // normalized for whitespace. This guarantees that changing the filename
+      // or PDF metadata (ModDate, Producer, etc.) yields the exact same hash!
+      const canonicalContent = normalizedTextTokens
+        .map(t => t.trim().replace(/\s+/g, ' '))
+        .filter(Boolean)
+        .join('|');
+
+      const encoder = new TextEncoder();
+      const data = encoder.encode(canonicalContent);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // =========================================================================
+    // 5. INTELLIGENT RECEIPT PARSER & COMBINATORIAL 7%/19% TAX SOLVER
+    // =========================================================================
+    function parseGermanFloat(str) {
+      if (!str) return 0;
+      const cleaned = str.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+      const val = parseFloat(cleaned);
+      return isNaN(val) ? 0 : val;
+    }
+
+    function formatEUR(num, suffix = 'EUR') {
+      return num.toFixed(2).replace('.', ',') + ' ' + suffix;
+    }
+
+    function formatDateDE(dateObj) {
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const y = dateObj.getFullYear();
+      return `${d}.${m}.${y}`;
+    }
+
+    /**
+     * Evaluates a specific combination of item tax rates (array of 0.07 or 0.19) and shipping tax rate.
+     */
+    function evaluateTaxCombination(items, itemRateValues, shippingGross, shipRate) {
+      const shipNet = shipRate > 0 ? +(shippingGross / (1 + shipRate)).toFixed(2) : shippingGross;
+      const shipTax = +(shippingGross - shipNet).toFixed(2);
+
+      let sumTax7 = shipRate === 0.07 ? shipTax : 0;
+      let sumTax19 = shipRate === 0.19 ? shipTax : 0;
+      const itemRates = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const rate = itemRateValues[i] === 0.19 ? 0.19 : 0.07;
+        const gross = items[i].grossTotal;
+        const net = +(gross / (1 + rate)).toFixed(2);
+        const tax = +(gross - net).toFixed(2);
+        if (rate === 0.19) sumTax19 += tax;
+        else sumTax7 += tax;
+        itemRates.push({
+          rate,
+          netTotal: net,
+          netUnit: +(items[i].grossUnit / (1 + rate)).toFixed(2),
+          tax
+        });
+      }
+
+      sumTax7 = +sumTax7.toFixed(2);
+      sumTax19 = +sumTax19.toFixed(2);
+      const totalCalculatedTax = +(sumTax7 + sumTax19).toFixed(2);
+
+      return {
+        shipRate,
+        shipNet,
+        shipTax,
+        sumTax7,
+        sumTax19,
+        totalCalculatedTax,
+        itemRates,
+        rateList: itemRateValues
+      };
+    }
+
+    /**
+     * Mathematical Solver for 7% vs 19% VAT without an article database:
+     * Checks all 2^N combinations.
+     * - If exactly 1 combination matches the receipt tax (within 0.02 €), returns { unique: true, solution }.
+     * - If 0 combinations match OR >1 combinations match (e.g. two items have the exact same price
+     *   but different tax rates), returns { unique: false, reason, candidateSolution } so the
+     *   Fallback Pop-up Modal can ask the user!
+     */
+    function solveTaxSplit(items, shippingGross, receiptTax) {
+      const n = items.length;
+      if (n === 0 || n > 14) {
+        return {
+          unique: false,
+          reason: 'Zu viele Positionen für die automatische Kombinatorik – bitte Steuersätze kurz prüfen.',
+          candidate: evaluateTaxCombination(items, items.map(() => 0.07), shippingGross, 0)
+        };
+      }
+
+      const TOLERANCE = 0.025;
+      // First check with shipping tax = 0% (as used in the shop receipts order-14 and order-11).
+      // If no match exists at 0%, also test shipping at 7% and 19%.
+      const shippingCandidates = [0, 0.07, 0.19];
+      let matchingSolutions = [];
+      let bestClosest = null;
+      let smallestDiff = Infinity;
+
+      for (const shipRate of shippingCandidates) {
+        const currentMatches = [];
+        const totalCombos = 1 << n;
+
+        for (let mask = 0; mask < totalCombos; mask++) {
+          const rateList = [];
+          for (let i = 0; i < n; i++) {
+            const is19 = ((mask >> i) & 1) === 1;
+            rateList.push(is19 ? 0.19 : 0.07);
+          }
+
+          const evaluated = evaluateTaxCombination(items, rateList, shippingGross, shipRate);
+          const diff = Math.abs(evaluated.totalCalculatedTax - receiptTax);
+
+          if (diff < smallestDiff) {
+            smallestDiff = diff;
+            bestClosest = evaluated;
+          }
+
+          if (diff <= TOLERANCE) {
+            currentMatches.push(evaluated);
+          }
+        }
+
+        if (currentMatches.length > 0) {
+          matchingSolutions = currentMatches;
+          break; // Prefer the simplest shipping rate tier that matches
+        }
+      }
+
+      if (matchingSolutions.length === 1) {
+        return {
+          unique: true,
+          solution: matchingSolutions[0]
+        };
+      }
+
+      if (matchingSolutions.length > 1) {
+        return {
+          unique: false,
+          reason: `Es gibt ${matchingSolutions.length} mathematisch mögliche Kombinationen (z. B. gleich teure Artikel mit unterschiedlichem Steuersatz), die exakt ${formatEUR(receiptTax, '€')} Steuer ergeben. Bitte wähle kurz aus, welcher Artikel 7% bzw. 19% hat.`,
+          candidate: matchingSolutions[0]
+        };
+      }
+
+      return {
+        unique: false,
+        reason: `Aus der Beleg-Steuer (${formatEUR(receiptTax, '€')}) ließ sich keine eindeutige 7%/19%-Kombination berechnen. Bitte lege die Steuersätze für die Positionen kurz fest.`,
+        candidate: bestClosest || evaluateTaxCombination(items, items.map(() => 0.07), shippingGross, 0)
+      };
+    }
+
+    // =========================================================================
+    // 5B. INTERACTIVE FALLBACK MODAL FOR AMBIGUOUS TAX SPLITS
+    // =========================================================================
+    let modalDraftRates = [];
+    let modalDraftShipRate = 0;
+
+    function openTaxFallbackModal(inv, reasonText) {
+      if (!inv) return;
+      const modal = document.getElementById('taxFallbackModal');
+      const reasonEl = document.getElementById('taxModalReasonText');
+      if (reasonEl && reasonText) {
+        reasonEl.textContent = reasonText;
+      }
+
+      // Initialize draft rates from existing manual override or solver candidate
+      const solved = solveTaxSplit(inv.items, inv.shippingGross, inv.taxAmount);
+      const baseSol = inv.manualTaxSolution || (solved.unique ? solved.solution : solved.candidate);
+
+      modalDraftRates = baseSol
+        ? [...baseSol.rateList]
+        : inv.items.map(() => 0.07);
+      modalDraftShipRate = baseSol ? baseSol.shipRate : 0;
+
+      renderTaxModalContent(inv);
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function closeTaxFallbackModal() {
+      const modal = document.getElementById('taxFallbackModal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    function renderTaxModalContent(inv) {
+      const container = document.getElementById('taxModalItemsContainer');
+      if (!container || !inv) return;
+
+      container.innerHTML = inv.items.map((item, idx) => {
+        const currentRate = modalDraftRates[idx] || 0.07;
+        const is7 = currentRate === 0.07;
+        const is19 = currentRate === 0.19;
+
+        return `
+          <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div class="min-w-0">
+              <div class="text-xs font-bold text-slate-900 truncate">${idx + 1}. ${item.title}</div>
+              <div class="text-[11px] text-slate-500">${item.qty}x ${formatEUR(item.grossUnit, '€')} · Gesamt brutto: <strong>${formatEUR(item.grossTotal, '€')}</strong></div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" data-item-idx="${idx}" data-rate="0.07"
+                class="item-tax-btn px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${is7 ? 'bg-blue-600 text-white border-blue-600 shadow-2xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
+                7% (Buch)
+              </button>
+              <button type="button" data-item-idx="${idx}" data-rate="0.19"
+                class="item-tax-btn px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${is19 ? 'bg-blue-600 text-white border-blue-600 shadow-2xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
+                19% (Spiel/Karten)
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Bind item rate buttons
+      container.querySelectorAll('.item-tax-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.getAttribute('data-item-idx'), 10);
+          const rate = parseFloat(btn.getAttribute('data-rate'));
+          modalDraftRates[idx] = rate;
+          renderTaxModalContent(inv);
+        });
+      });
+
+      // Update shipping rate buttons
+      document.querySelectorAll('.ship-rate-btn').forEach(btn => {
+        const r = parseFloat(btn.getAttribute('data-ship-rate'));
+        const active = Math.abs(r - modalDraftShipRate) < 0.001;
+        btn.className = `ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
+          active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+        }`;
+        btn.onclick = () => {
+          modalDraftShipRate = r;
+          renderTaxModalContent(inv);
+        };
+      });
+
+      // Evaluate live tax preview
+      const evaluated = evaluateTaxCombination(inv.items, modalDraftRates, inv.shippingGross, modalDraftShipRate);
+      document.getElementById('taxModalTargetTax').textContent = formatEUR(inv.taxAmount, '€');
+      document.getElementById('taxModalCurrentTax').textContent = formatEUR(evaluated.totalCalculatedTax, '€');
+      document.getElementById('taxModalSplitPreview').textContent =
+        `7% USt.: ${formatEUR(evaluated.sumTax7, '€')} · 19% USt.: ${formatEUR(evaluated.sumTax19, '€')}`;
+
+      const diff = Math.abs(evaluated.totalCalculatedTax - inv.taxAmount);
+      const badge = document.getElementById('taxModalMatchBadge');
+      if (diff <= 0.03) {
+        badge.textContent = '✓ Stimmt exakt mit Beleg-Steuer überein';
+        badge.className = 'text-[11px] font-semibold mt-0.5 text-emerald-700';
+      } else {
+        badge.textContent = `Δ ${formatEUR(Math.abs(evaluated.totalCalculatedTax - inv.taxAmount), '€')} Abweichung zum Beleg`;
+        badge.className = 'text-[11px] font-semibold mt-0.5 text-amber-700';
+      }
+    }
+
+    /**
+     * Parses raw text lines from KJP order receipts (like order-14.pdf and order-11.pdf)
+     */
+    function parseReceiptTextLines(lines) {
+      const cleanLines = lines.map(l => l.trim()).filter(Boolean);
+
+      // 1. Extract Order Number (#14, #11, etc.)
+      let orderNo = '1000';
+      for (const line of cleanLines) {
+        const m = line.match(/Neue Bestellung\s*#(\d+)/i) || line.match(/Bestellung\s*#(\d+)/i);
+        if (m) {
+          orderNo = m[1];
+          break;
+        }
+      }
+
+      // 2. Extract Order Date (2026/11/10 -> 10.11.2026) and fallback customer name
+      let deliveryDate = formatDateDE(new Date());
+      let headerCustomerName = '';
+      for (const line of cleanLines) {
+        const dm = line.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})(?:\s+\d{2}:\d{2}:\d{2})?\s*(.*)/);
+        if (dm) {
+          deliveryDate = `${dm[3]}.${dm[2]}.${dm[1]}`;
+          if (dm[4] && dm[4].trim().length > 2) {
+            headerCustomerName = dm[4].trim();
+          }
+          break;
+        }
+      }
+
+      // 3. Extract Customer Address (Anchor on 5-digit German Postal Code + City before "Ihre Bestellung")
+      const orderStartIdx = cleanLines.findIndex(l => /Ihre Bestellung/i.test(l));
+      const headerSection = orderStartIdx > 0 ? cleanLines.slice(0, orderStartIdx) : cleanLines;
+
+      const ignoredHeaderLabels = /^(Zahlungsmethode|Liefermethode|Standard-Lieferung|Bezahlt mit.*|Kundendetails|Lieferadresse|Rechnungsdaten|Neue Bestellung.*)$/i;
+      const candidateAddressTokens = [];
+
+      for (const rawLine of headerSection) {
+        if (ignoredHeaderLabels.test(rawLine)) continue;
+        if (/\d{4}[\/\-]\d{2}[\/\-]\d{2}/.test(rawLine)) continue;
+        if (rawLine.includes('@')) continue;
+        if (/^\+?\d[\d\s\/-]{6,}$/.test(rawLine)) continue;
+
+        // Clean prefix label if merged on same line
+        let cleaned = rawLine
+          .replace(/^(Lieferadresse|Rechnungsdaten|Kundendetails)\s+/i, '')
+          .trim();
+        if (cleaned) candidateAddressTokens.push(cleaned);
+      }
+
+      let addressLines = [];
+      // Find PLZ + City anchor (5-digit postal code)
+      const plzIdx = candidateAddressTokens.findIndex(t => /^\d{5}\s+[A-Za-zÄÖÜäöüß]/.test(t));
+      if (plzIdx !== -1) {
+        const plzLine = candidateAddressTokens[plzIdx];
+        const streetLine = plzIdx >= 1 ? candidateAddressTokens[plzIdx - 1] : '';
+        const nameLine = plzIdx >= 2 ? candidateAddressTokens[plzIdx - 2] : (headerCustomerName || '');
+        const countryLine = (candidateAddressTokens[plzIdx + 1] && /^(Deutschland|Österreich|Schweiz)$/i.test(candidateAddressTokens[plzIdx + 1]))
+          ? candidateAddressTokens[plzIdx + 1]
+          : 'Deutschland';
+
+        addressLines = [nameLine, streetLine, plzLine, countryLine].filter(Boolean);
+      } else {
+        addressLines = [
+          headerCustomerName || ''
+        ].filter(Boolean);
+      }
+
+      // 4. Extract Order Items & Totals after "Ihre Bestellung"
+      const bodyLines = orderStartIdx !== -1 ? cleanLines.slice(orderStartIdx + 1) : cleanLines;
+
+      const items = [];
+      let pendingTitleParts = [];
+      const summaryKeywords = /^(Zwischensumme|Versand|Steuer|Gesamtbetrag|inkl\..*USt\.?|Ihre Bestellung|Zahlungsmethode|Liefermethode)$/i;
+
+      for (let i = 0; i < bodyLines.length; i++) {
+        const line = bodyLines[i];
+
+        if (summaryKeywords.test(line)) {
+          continue;
+        }
+
+        // Check for quantity x unit price pattern: e.g. "1x 21,50 €" or "1 x 34,50 €" or "$1\times21,50\in$"
+        const qtyMatch = line.match(/(\d+)\s*(?:[x×]|\\times)\s*(\d+[.,]\d{2})/i);
+        if (qtyMatch) {
+          const qty = parseInt(qtyMatch[1], 10) || 1;
+          const grossUnit = parseGermanFloat(qtyMatch[2]);
+
+          // Check if next line is the standalone line total (e.g. "34,50 €"), and skip it so it doesn't pollute next title
+          let grossTotal = +(qty * grossUnit).toFixed(2);
+          if (i + 1 < bodyLines.length) {
+            const nextPriceMatch = bodyLines[i + 1].match(/^(\d+[.,]\d{2})\s*€?$/);
+            if (nextPriceMatch) {
+              grossTotal = parseGermanFloat(nextPriceMatch[1]);
+              i++; // consume line total token
+            }
+          }
+
+          // Clean and deduplicate product title parts
+          const filteredTitles = pendingTitleParts.filter(part => {
+            if (summaryKeywords.test(part)) return false;
+            if (/^\d+[.,]\d{2}\s*€?$/.test(part)) return false;
+            // Ignore tiny all-caps thumbnail OCR artifacts like "DAS DENUN"
+            if (/^[A-ZÄÖÜ\s]{4,12}$/.test(part) && pendingTitleParts.length > 1) return false;
+            return true;
+          });
+
+          // Deduplicate if second line is already a substring of the first (e.g. "Trauma First: Das Seefahrercamp 6-10" + "Trauma First")
+          const finalTitleParts = [];
+          for (const part of filteredTitles) {
+            const alreadyContained = finalTitleParts.some(existing =>
+              existing.toLowerCase().includes(part.toLowerCase())
+            );
+            if (!alreadyContained) {
+              finalTitleParts.push(part);
+            }
+          }
+
+          const title = finalTitleParts.join(' – ') || `Artikel Position ${items.length + 1}`;
+          items.push({
+            pos: items.length + 1,
+            title,
+            qty,
+            grossUnit,
+            grossTotal
+          });
+          pendingTitleParts = [];
+          continue;
+        }
+
+        // Ignore standalone euro amounts from being added as product titles
+        if (/^\d+[.,]\d{2}\s*€?$/.test(line)) {
+          continue;
+        }
+
+        pendingTitleParts.push(line);
+      }
+
+      // 5. Extract Summary Totals (Zwischensumme, Versand, Steuer, Gesamtbetrag)
+      const itemsSubtotal = +items.reduce((acc, it) => acc + it.grossTotal, 0).toFixed(2);
+
+      // Extract explicit tax from "inkl. 1,41 € USt." or "Steuer 1,41 €"
+      let taxAmount = 0;
+      const fullText = bodyLines.join(' ');
+      const ustMatch = fullText.match(/inkl\.\s*(\d+[.,]\d{2})\s*€?\s*USt/i) || fullText.match(/Steuer\s+(\d+[.,]\d{2})\s*€/i);
+      if (ustMatch) {
+        taxAmount = parseGermanFloat(ustMatch[1]);
+      }
+
+      // Extract all standalone monetary amounts in the summary section to reliably determine Shipping and Total Gross
+      const allMoneyMatches = [...fullText.matchAll(/(\d+[.,]\d{2})\s*€/g)].map(m => parseGermanFloat(m[1]));
+      let totalGross = itemsSubtotal;
+      if (allMoneyMatches.length > 0) {
+        const maxAmount = Math.max(...allMoneyMatches);
+        if (maxAmount >= itemsSubtotal) {
+          totalGross = maxAmount;
+        }
+      }
+
+      let shippingGross = +(totalGross - itemsSubtotal).toFixed(2);
+      if (shippingGross < 0 || shippingGross > 50) {
+        shippingGross = 4.90; // Standard KJP shipping fallback
+        totalGross = +(itemsSubtotal + shippingGross).toFixed(2);
+      }
+
+      // If taxAmount wasn't matched via "inkl. X USt.", find the remaining number in the summary block
+      if (!taxAmount && allMoneyMatches.length >= 2) {
+        const candidates = allMoneyMatches.filter(v =>
+          Math.abs(v - totalGross) > 0.01 &&
+          Math.abs(v - itemsSubtotal) > 0.01 &&
+          Math.abs(v - shippingGross) > 0.01
+        );
+        if (candidates.length > 0) {
+          taxAmount = candidates[candidates.length - 1];
+        }
+      }
+
+      const customerNo = String(1050 + (parseInt(orderNo, 10) || 1));
+
+      return {
+        orderNo,
+        customerNo,
+        customerName: addressLines[0] || headerCustomerName || 'Kunde',
+        addressLines,
+        deliveryDate,
+        invoiceDate: formatDateDE(new Date()),
+        items,
+        subtotalGross: itemsSubtotal,
+        shippingGross,
+        taxAmount,
+        totalGross
+      };
+    }
+
+    // =========================================================================
+    // 6. EXTRACT TEXT TOKENS FROM PDF IN BROWSER (100% LOCAL)
+    // =========================================================================
+    async function extractLinesFromPdfBuffer(arrayBuffer) {
+      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const allLines = [];
+      const rawContentTokensForHash = [];
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+
+        // Collect raw tokens sorted deterministically for content hashing
+        const pageItems = textContent.items
+          .filter(item => item.str && item.str.trim().length > 0)
+          .map(item => ({
+            str: item.str.trim(),
+            x: Math.round(item.transform[4]),
+            y: Math.round(item.transform[5])
+          }));
+
+        // Sort top-to-bottom (higher Y is higher on PDF page), then left-to-right (lower X first)
+        pageItems.sort((a, b) => {
+          if (Math.abs(b.y - a.y) > 4) {
+            return b.y - a.y;
+          }
+          return a.x - b.x;
+        });
+
+        for (const it of pageItems) {
+          rawContentTokensForHash.push(it.str);
+          allLines.push(it.str);
+        }
+      }
+
+      return { allLines, rawContentTokensForHash };
+    }
+
+    // =========================================================================
+    // 7. PROCESS UPLOADED RECEIPT (HASH CHECK + SMART TAX SOLVER + DOWNLOAD)
+    // =========================================================================
+    async function processReceiptData(parsedData, contentHash, sourceLabel = 'Beleg') {
+      let assignedInvoiceNo = '';
+      let assignedNumericNo = 0;
+      let isDuplicate = false;
+
+      if (state.hashRegistry.has(contentHash)) {
+        // DUPLICATE CONTENT DETECTED -> Jump back to original invoice number!
+        const existing = state.hashRegistry.get(contentHash);
+        assignedInvoiceNo = existing.invoiceNumber;
+        assignedNumericNo = existing.numericNo;
+        isDuplicate = true;
+
+        showBanner(
+          'warning',
+          `Bereits erstellter Beleg erkannt (${sourceLabel})`,
+          `Für dieses Dokument wurde bereits eine Rechnung generiert. Es wurde automatisch auf die ursprüngliche Rechnungsnummer ${assignedInvoiceNo} zurückgesprungen.`
+        );
+      } else {
+        // NEW RECEIPT -> Assign next chronological invoice number
+        assignedNumericNo = state.presets.nextNumber;
+        assignedInvoiceNo = `${state.presets.prefix}${assignedNumericNo}`;
+        state.presets.nextNumber = assignedNumericNo + 1;
+
+        // STRICT PRIVACY: Only log hash and invoiceNumber!
+        await saveHashMapping({
+          hash: contentHash,
+          invoiceNumber: assignedInvoiceNo,
+          numericNo: assignedNumericNo
+        });
+
+        showBanner(
+          'success',
+          `Rechnung ${assignedInvoiceNo} erstellt!`,
+          `Bestellung #${parsedData.orderNo} wurde umgewandelt und heruntergeladen.`
+        );
+      }
+
+      // Check if 7% vs 19% equation is uniquely solvable
+      const taxSolveResult = solveTaxSplit(parsedData.items, parsedData.shippingGross, parsedData.taxAmount);
+
+      state.currentInvoice = {
+        ...parsedData,
+        invoiceNumber: assignedInvoiceNo,
+        contentHash,
+        isDuplicate,
+        manualTaxSolution: taxSolveResult.unique ? taxSolveResult.solution : null
+      };
+
+      renderInvoicePreview();
+      updateCounterUI();
+
+      if (!taxSolveResult.unique) {
+        // ONLY when automatic calculation fails or is ambiguous -> Open fallback popup!
+        openTaxFallbackModal(state.currentInvoice, taxSolveResult.reason);
+        return;
+      }
+
+      const autoDownload = document.getElementById('autoDownloadToggle')?.checked;
+      if (autoDownload) {
+        generateAndDownloadPdf(state.currentInvoice);
+      }
+    }
+
+    // =========================================================================
+    // 8. BUILD TABLE & TOTALS DATA (ALWAYS SMART 7%/19% SPLIT + FALLBACK)
+    // =========================================================================
+    function buildComputedInvoiceModel(inv) {
+      if (!inv) return null;
+
+      const solved = solveTaxSplit(inv.items, inv.shippingGross, inv.taxAmount);
+      const activeSolution = inv.manualTaxSolution || (solved.unique ? solved.solution : solved.candidate);
+
+      const rows = inv.items.map((it, idx) => {
+        const r = activeSolution.itemRates[idx];
+        return {
+          pos: `${idx + 1}.`,
+          title: it.title,
+          qty: `${it.qty.toFixed(2).replace('.', ',')} Stk`,
+          unitPrice: formatEUR(r.netUnit),
+          totalPrice: formatEUR(r.netTotal)
+        };
+      });
+
+      rows.push({
+        pos: `${rows.length + 1}.`,
+        title: 'Versandkosten',
+        qty: '1,00 Stk',
+        unitPrice: formatEUR(activeSolution.shipNet),
+        totalPrice: formatEUR(activeSolution.shipNet)
+      });
+
+      const totalNet = +(inv.totalGross - activeSolution.totalCalculatedTax).toFixed(2);
+      const summaryRows = [
+        { label: 'Gesamtbetrag netto', value: formatEUR(totalNet), bold: false }
+      ];
+      if (activeSolution.sumTax7 > 0) {
+        summaryRows.push({ label: 'Umsatzsteuer 7%', value: formatEUR(activeSolution.sumTax7), bold: false });
+      }
+      if (activeSolution.sumTax19 > 0) {
+        summaryRows.push({ label: 'Umsatzsteuer 19%', value: formatEUR(activeSolution.sumTax19), bold: false });
+      }
+      if (activeSolution.sumTax7 === 0 && activeSolution.sumTax19 === 0) {
+        summaryRows.push({ label: 'Umsatzsteuer', value: formatEUR(0), bold: false });
+      }
+      summaryRows.push({ label: 'Gesamtbetrag brutto', value: formatEUR(inv.totalGross), bold: true });
+
+      return {
+        ...inv,
+        rows,
+        summaryRows
+      };
+    }
+
+    // =========================================================================
+    // 9. VISUAL A4 HTML PREVIEW (UPDATED FOOTER & PAYMENT CONFIRMATION)
+    // =========================================================================
+    function renderInvoicePreview() {
+      const sheet = document.getElementById('invoicePreviewSheet');
+      const emptyState = document.getElementById('emptyPreviewState');
+      const activeContainer = document.getElementById('activePreviewContainer');
+      const model = buildComputedInvoiceModel(state.currentInvoice);
+
+      if (!sheet || !model) {
+        if (emptyState) emptyState.classList.remove('hidden');
+        if (activeContainer) {
+          activeContainer.classList.add('hidden');
+          activeContainer.classList.remove('flex');
+        }
+        return;
+      }
+
+      if (emptyState) emptyState.classList.add('hidden');
+      if (activeContainer) {
+        activeContainer.classList.remove('hidden');
+        activeContainer.classList.add('flex');
+      }
+
+      const p = state.presets;
+      const statusTitle = document.getElementById('currentDocTitle');
+      const statusDot = document.getElementById('statusDot');
+
+      if (statusTitle) {
+        statusTitle.textContent = `${model.invoiceNumber} · ${model.customerName} (Bestellung #${model.orderNo})`;
+      }
+      if (statusDot) {
+        statusDot.className = `w-2.5 h-2.5 rounded-full ${model.isDuplicate ? 'bg-amber-500' : 'bg-emerald-500'}`;
+      }
+
+      sheet.innerHTML = `
+        <!-- Top Section -->
+        <div>
+          <!-- Top Right KJP Logo -->
+          <div class="flex justify-end mb-4">
+            ${state.customLogoDataUrl
+              ? `<img src="${state.customLogoDataUrl}" alt="kjp" class="h-14 object-contain" />`
+              : `<div class="text-3xl font-extrabold tracking-tight text-slate-800">kjp</div>`
+            }
+          </div>
+
+          <!-- Address & Metadata Grid -->
+          <div class="grid grid-cols-12 gap-4 mb-8">
+            <!-- Left: Sender Line + Recipient Address -->
+            <div class="col-span-7">
+              <div class="text-[8.5px] text-slate-500 underline decoration-slate-300 mb-3">
+                ${p.senderLine}
+              </div>
+              <div class="text-[11px] leading-snug text-slate-900 space-y-0.5 font-normal">
+                ${model.addressLines.map(line => `<div>${line}</div>`).join('')}
+              </div>
+            </div>
+
+            <!-- Right: Metadata Block -->
+            <div class="col-span-5 text-[10px] leading-relaxed">
+              <div class="grid grid-cols-2 gap-x-2">
+                <span class="text-slate-600">Rechnungs-Nr.</span>
+                <span class="text-right font-medium">${model.invoiceNumber}</span>
+
+                <span class="text-slate-600">Rechnungsdatum</span>
+                <span class="text-right">${model.invoiceDate}</span>
+
+                <span class="text-slate-600">Lieferdatum</span>
+                <span class="text-right">${model.deliveryDate}</span>
+
+                <span class="text-slate-600">Ihre Kundennummer</span>
+                <span class="text-right">${model.customerNo}</span>
+
+                <span class="text-slate-600">Ihr Ansprechpartner</span>
+                <span class="text-right">${p.contactPerson}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Subject & Salutation -->
+          <div class="mb-5">
+            <h2 class="text-sm font-bold text-slate-900 mb-3">Rechnung Nr. ${model.invoiceNumber}</h2>
+            <div class="text-[10.5px] text-slate-800 space-y-1">
+              ${p.introLines.map(l => `<p>${l}</p>`).join('')}
+            </div>
+          </div>
+
+          <!-- Positions Table -->
+          <div class="mb-5">
+            <table class="w-full text-[10px] border-collapse">
+              <thead>
+                <tr class="border-y border-slate-400 text-slate-700 font-semibold bg-slate-50/70">
+                  <th class="py-1.5 text-left w-10 pl-1">Pos.</th>
+                  <th class="py-1.5 text-left">Beschreibung</th>
+                  <th class="py-1.5 text-right w-20">Menge</th>
+                  <th class="py-1.5 text-right w-24">Einzelpreis</th>
+                  <th class="py-1.5 text-right w-24 pr-1">Gesamtpreis</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200 border-b border-slate-400">
+                ${model.rows.map(r => `
+                  <tr>
+                    <td class="py-1.5 pl-1 align-top text-slate-700">${r.pos}</td>
+                    <td class="py-1.5 align-top text-slate-900 pr-2">${r.title}</td>
+                    <td class="py-1.5 align-top text-right text-slate-700">${r.qty}</td>
+                    <td class="py-1.5 align-top text-right text-slate-700">${r.unitPrice}</td>
+                    <td class="py-1.5 pr-1 align-top text-right text-slate-900">${r.totalPrice}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            <!-- Totals Block -->
+            <div class="mt-2 flex justify-end">
+              <div class="w-64 space-y-1 text-[10px]">
+                ${model.summaryRows.map(s => `
+                  <div class="flex justify-between ${s.bold ? 'font-bold text-slate-900 border-t border-slate-400 pt-1 text-[10.5px]' : 'text-slate-700'}">
+                    <span>${s.label}</span>
+                    <span>${s.value}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
+          <!-- Payment Confirmation & Closing -->
+          <div class="text-[10px] text-slate-800 space-y-1.5 mt-6">
+            <p class="font-medium">${p.paymentNote}</p>
+            <div class="pt-3">
+              <p>Mit freundlichen Grüßen</p>
+              <p class="mt-4 font-medium">${p.contactPerson}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom 3-Column Footer (Without Bank Account & Without Katrin Nelius) -->
+        <div class="pt-6 border-t border-slate-300 mt-8">
+          <div class="grid grid-cols-3 gap-4 text-[8.5px] text-slate-600 leading-snug">
+            <div>${p.footerCol1.map(l => `<div>${l}</div>`).join('')}</div>
+            <div>${p.footerCol2.map(l => `<div>${l}</div>`).join('')}</div>
+            <div>${p.footerCol3.map(l => `<div>${l}</div>`).join('')}</div>
+          </div>
+          <div class="text-right text-[8px] text-slate-500 mt-2">1/1</div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // 10. VECTOR PDF GENERATOR VIA JSPDF (UPDATED DETAILS & 3-COL FOOTER)
+    // =========================================================================
+    function generateAndDownloadPdf(inv) {
+      const model = buildComputedInvoiceModel(inv);
+      if (!model) return;
+
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const p = state.presets;
+      const leftMargin = 20;
+      const rightMargin = 190;
+      const contentWidth = rightMargin - leftMargin;
+
+      // 1. Logo (top right)
+      if (state.customLogoDataUrl) {
+        try {
+          doc.addImage(state.customLogoDataUrl, 'PNG', 152, 14, 36, 16);
+        } catch (_) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(22);
+          doc.text('kjp', 188, 25, { align: 'right' });
+        }
+      }
+
+      // 2. Small Sender Line above Recipient Address
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(90, 90, 90);
+      doc.text(p.senderLine, leftMargin, 43);
+      doc.setDrawColor(180, 180, 180);
+      doc.setLineWidth(0.2);
+      doc.line(leftMargin, 44.2, leftMargin + 78, 44.2);
+
+      // 3. Recipient Address
+      doc.setFontSize(10);
+      doc.setTextColor(20, 20, 20);
+      let addrY = 50;
+      for (const line of model.addressLines) {
+        doc.text(String(line), leftMargin, addrY);
+        addrY += 4.8;
+      }
+
+      // 4. Right Metadata Block
+      const metaXLabel = 122;
+      const metaXVal = rightMargin;
+      let metaY = 48;
+      const metaPairs = [
+        ['Rechnungs-Nr.', model.invoiceNumber],
+        ['Rechnungsdatum', model.invoiceDate],
+        ['Lieferdatum', model.deliveryDate],
+        ['Ihre Kundennummer', model.customerNo],
+        ['Ihr Ansprechpartner', p.contactPerson]
+      ];
+      doc.setFontSize(9);
+      for (const [label, val] of metaPairs) {
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(70, 70, 70);
+        doc.text(label, metaXLabel, metaY);
+        doc.setTextColor(20, 20, 20);
+        doc.text(String(val), metaXVal, metaY, { align: 'right' });
+        metaY += 4.8;
+      }
+
+      // 5. Title & Intro Text
+      let y = Math.max(addrY, metaY) + 10;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(15, 15, 15);
+      doc.text(`Rechnung Nr. ${model.invoiceNumber}`, leftMargin, y);
+
+      y += 7;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      for (const introLine of p.introLines) {
+        doc.text(introLine, leftMargin, y);
+        y += 4.8;
+      }
+
+      // 6. Positions Table Header
+      y += 4;
+      doc.setDrawColor(120, 120, 120);
+      doc.setLineWidth(0.3);
+      doc.line(leftMargin, y, rightMargin, y);
+      y += 5;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('Pos.', leftMargin + 1, y);
+      doc.text('Beschreibung', leftMargin + 14, y);
+      doc.text('Menge', 136, y, { align: 'right' });
+      doc.text('Einzelpreis', 162, y, { align: 'right' });
+      doc.text('Gesamtpreis', rightMargin - 1, y, { align: 'right' });
+
+      y += 2.2;
+      doc.line(leftMargin, y, rightMargin, y);
+      y += 5;
+
+      // 7. Positions Table Body (supports multi-line wrapping & page breaks)
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+
+      for (const row of model.rows) {
+        const descLines = doc.splitTextToSize(row.title, 95);
+        const rowHeight = Math.max(descLines.length * 4.5, 5.5);
+
+        if (y + rowHeight > 240) {
+          drawFooter(doc, p, 1, 2);
+          doc.addPage();
+          y = 25;
+        }
+
+        doc.text(row.pos, leftMargin + 1, y);
+        doc.text(descLines, leftMargin + 14, y);
+        doc.text(row.qty, 136, y, { align: 'right' });
+        doc.text(row.unitPrice, 162, y, { align: 'right' });
+        doc.text(row.totalPrice, rightMargin - 1, y, { align: 'right' });
+
+        y += rowHeight;
+        doc.setDrawColor(220, 220, 220);
+        doc.setLineWidth(0.15);
+        doc.line(leftMargin, y - 2.2, rightMargin, y - 2.2);
+        y += 2.5;
+      }
+
+      // Bottom border of table
+      doc.setDrawColor(120, 120, 120);
+      doc.setLineWidth(0.3);
+      doc.line(leftMargin, y - 2.5, rightMargin, y - 2.5);
+
+      // 8. Summary Totals Block
+      y += 3;
+      for (const sRow of model.summaryRows) {
+        if (sRow.bold) {
+          doc.setDrawColor(120, 120, 120);
+          doc.setLineWidth(0.25);
+          doc.line(122, y - 3.2, rightMargin, y - 3.2);
+          doc.setFont('helvetica', 'bold');
+        } else {
+          doc.setFont('helvetica', 'normal');
+        }
+        doc.text(sRow.label, 122, y);
+        doc.text(sRow.value, rightMargin - 1, y, { align: 'right' });
+        y += 5;
+      }
+
+      // 9. Payment Note ("Wir haben Ihre Zahlung dankend erhalten.") & Closing
+      y += 6;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      const wrappedNote = doc.splitTextToSize(p.paymentNote, contentWidth);
+      doc.text(wrappedNote, leftMargin, y);
+      y += wrappedNote.length * 5 + 4;
+
+      doc.text('Mit freundlichen Grüßen', leftMargin, y);
+      y += 9;
+      doc.text(p.contactPerson, leftMargin, y);
+
+      // 10. Footer (3 Columns, no bank details)
+      drawFooter(doc, p, 1, 1);
+
+      // Safe filename based on invoice number and last name
+      const cleanLastName = model.customerName.split(/\s+/).pop().replace(/[^a-zA-Z0-9äöüÄÖÜß_-]/g, '');
+      const filename = `${model.invoiceNumber}_${cleanLastName || 'Rechnung'}.pdf`;
+      doc.save(filename);
+    }
+
+    function drawFooter(doc, p, pageNo, totalPages) {
+      const footerTop = 266;
+      doc.setDrawColor(180, 180, 180);
+      doc.setLineWidth(0.2);
+      doc.line(20, footerTop - 3.5, 190, footerTop - 3.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(95, 95, 95);
+
+      const cols = [p.footerCol1, p.footerCol2, p.footerCol3];
+      const colX = [20, 78, 138];
+
+      cols.forEach((colLines, idx) => {
+        let cy = footerTop;
+        colLines.forEach(l => {
+          doc.text(l, colX[idx], cy);
+          cy += 3.4;
+        });
+      });
+
+      doc.text(`${pageNo}/${totalPages}`, 190, 286, { align: 'right' });
+    }
+
+    // =========================================================================
+    // 11. UI HELPERS: COUNTER & NOTIFICATION BANNER
+    // =========================================================================
+    function updateCounterUI() {
+      const badge = document.getElementById('nextInvoiceBadge');
+      if (badge) {
+        badge.textContent = `${state.presets.prefix}${state.presets.nextNumber}`;
+      }
+    }
+
+    function showBanner(type, title, message) {
+      const container = document.getElementById('bannerContainer');
+      if (!container) return;
+
+      const styles = {
+        success: {
+          bg: 'bg-emerald-50 border-emerald-200 text-emerald-900',
+          icon: 'check-circle-2',
+          iconColor: 'text-emerald-600'
+        },
+        warning: {
+          bg: 'bg-amber-50 border-amber-300 text-amber-900',
+          icon: 'rotate-ccw',
+          iconColor: 'text-amber-600'
+        },
+        error: {
+          bg: 'bg-red-50 border-red-200 text-red-900',
+          icon: 'alert-triangle',
+          iconColor: 'text-red-600'
+        }
+      }[type] || {
+        bg: 'bg-blue-50 border-blue-200 text-blue-900',
+        icon: 'info',
+        iconColor: 'text-blue-600'
+      };
+
+      container.innerHTML = `
+        <div class="rounded-xl border px-4 py-3 shadow-xs flex items-start justify-between gap-3 ${styles.bg}">
+          <div class="flex items-start gap-2.5">
+            <i data-lucide="${styles.icon}" class="w-5 h-5 shrink-0 mt-0.5 ${styles.iconColor}"></i>
+            <div class="text-xs sm:text-sm">
+              <span class="font-bold">${title}</span>
+              <span class="block sm:inline sm:ml-1.5 opacity-90">${message}</span>
+            </div>
+          </div>
+          <button type="button" id="closeBannerBtn" class="opacity-60 hover:opacity-100 p-1">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      `;
+
+      if (window.lucide) window.lucide.createIcons();
+      document.getElementById('closeBannerBtn')?.addEventListener('click', () => {
+        container.innerHTML = '';
+      });
+    }
+
+    // =========================================================================
+    // 12. DOM BINDINGS (NO INITIAL CUSTOMER DATA)
+    // =========================================================================
+    window.addEventListener('DOMContentLoaded', async () => {
+      if (window.lucide) window.lucide.createIcons();
+      await initLogo();
+      await initStorage();
+
+      // File Drag & Drop bindings
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('fileInput');
+
+      dropZone.addEventListener('click', () => fileInput.click());
+
+      ['dragenter', 'dragover'].forEach(evtName => {
+        dropZone.addEventListener(evtName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.add('drop-zone-active');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach(evtName => {
+        dropZone.addEventListener(evtName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.remove('drop-zone-active');
+        });
+      });
+
+      dropZone.addEventListener('drop', async (e) => {
+        const files = Array.from(e.dataTransfer?.files || []);
+        await handleUploadedFiles(files);
+      });
+
+      fileInput.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files || []);
+        await handleUploadedFiles(files);
+        fileInput.value = '';
+      });
+
+      async function handleUploadedFiles(files) {
+        const pdfFiles = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        if (pdfFiles.length === 0) {
+          showBanner('error', 'Ungültiges Dateiformat', 'Bitte ziehe eine gültige PDF-Bestellbestätigung in das Feld.');
+          return;
+        }
+
+        for (const file of pdfFiles) {
+          try {
+            const buffer = await file.arrayBuffer();
+            const { allLines, rawContentTokensForHash } = await extractLinesFromPdfBuffer(buffer);
+            const contentHash = await computeContentHash(rawContentTokensForHash);
+            const parsedData = parseReceiptTextLines(allLines);
+            await processReceiptData(parsedData, contentHash, file.name);
+          } catch (err) {
+            console.error('Fehler beim Lesen der PDF:', err);
+            showBanner('error', `Fehler bei ${file.name}`, 'Die PDF-Datei konnte nicht ausgelesen werden.');
+          }
+        }
+      }
+
+      // Fallback Tax Modal Controls (Only triggered automatically on ambiguity)
+      document.getElementById('closeTaxModalBtn').addEventListener('click', closeTaxFallbackModal);
+
+      document.getElementById('applyTaxModalBtn').addEventListener('click', () => {
+        if (!state.currentInvoice) return;
+        state.currentInvoice.manualTaxSolution = evaluateTaxCombination(
+          state.currentInvoice.items,
+          [...modalDraftRates],
+          state.currentInvoice.shippingGross,
+          modalDraftShipRate
+        );
+        closeTaxFallbackModal();
+        renderInvoicePreview();
+        generateAndDownloadPdf(state.currentInvoice);
+      });
+
+      // Manual Download Button for Current Preview
+      document.getElementById('downloadCurrentPdfBtn').addEventListener('click', () => {
+        if (state.currentInvoice) {
+          generateAndDownloadPdf(state.currentInvoice);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
