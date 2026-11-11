@@ -261,10 +261,6 @@
 
   <!-- Application Logic (100% Local PDF Processing + Automatic Cross-Device GitHub Sync) -->
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
     // Configure PDF.js worker for 100% client-side in-browser parsing
     if (window.pdfjsLib) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -339,15 +335,12 @@
       },
       customLogoDataUrl: null,
       logoAspectRatio: 360 / 160,
-      // STRICT PRIVACY: Stores ONLY { hash, invoiceNumber, numericNo }
+      // STRICT PRIVACY: Stores ONLY { hash, altHashes, invoiceNumber, numericNo }
       hashRegistry: new Map(),
       githubFileSha: null,
       githubToken: localStorage.getItem(GH_TOKEN_STORAGE_KEY) || '',
       pendingFilesAfterToken: null,
-      currentInvoice: null,
-      db: null,
-      user: null,
-      appId: typeof __app_id !== 'undefined' ? __app_id : 'kjp-invoice-converter'
+      currentInvoice: null
     };
 
     // =========================================================================
@@ -456,6 +449,56 @@
       const normalized = rawToken
         .trim()
         .replace(/^github_pat_/, '@@GHPAT@@')
+        .replace(/^ghp_/, '@@GHP@@');
+      const reversed = normalized.split('').reverse().join('');
+      const hexParts = [];
+      for (let i = 0; i < reversed.length; i++) {
+        const code = reversed.charCodeAt(i) ^ OBFUSCATION_SALT.charCodeAt(i % OBFUSCATION_SALT.length);
+        hexParts.push(code.toString(16).padStart(2, '0'));
+      }
+      return 'v1:' + hexParts.join('');
+    }
+
+    function deobfuscateSyncKey(encoded) {
+      if (!encoded || typeof encoded !== 'string' || !encoded.startsWith('v1:')) return '';
+      try {
+        const hex = encoded.slice(3);
+        const chars = [];
+        for (let i = 0; i < hex.length; i += 2) {
+          const byte = parseInt(hex.slice(i, i + 2), 16);
+          const charIdx = i / 2;
+          const origCode = byte ^ OBFUSCATION_SALT.charCodeAt(charIdx % OBFUSCATION_SALT.length);
+          chars.push(String.fromCharCode(origCode));
+        }
+        return chars
+          .reverse()
+          .join('')
+          .replace(/^@@GHPAT@@/, 'github_pat_')
+          .replace(/^@@GHP@@/, 'ghp_');
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function encodeBase64UTF8(str) {
+      const bytes = new TextEncoder().encode(str);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    function decodeBase64UTF8(b64) {
+      const clean = String(b64).replace(/\s/g, '');
+      const binary = atob(clean);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder().decode(bytes);
+    }
+
     function mergeEntriesIntoState(entries, suggestedNextNumber = START_INVOICE_NUMBER, replaceExisting = false) {
       if (replaceExisting) {
         state.hashRegistry.clear();
@@ -595,10 +638,10 @@
 
     /**
      * Reads `hash-log.json` from `Diskettencoder/KJP`.
-     * Uses the latest commit SHA when authenticated to bypass any GitHub CDN ref caching,
-     * and immediately re-fetches authenticated if a new device just discovered `syncKey`.
+     * If `hash-log.json` was deleted on GitHub (HTTP 404), it resets the local
+     * counter to ReOS-00001, clears all cached hashes & tokens, and prompts for a token again.
      */
-    async function syncFromGitHub(isRetryWithToken = false) {
+    async function syncFromGitHub({ isRetryWithToken = false, allowCreateIfMissing = false } = {}) {
       const { owner, repo, branch, filePath } = GITHUB_CONFIG;
       const headers = {
         'Accept': 'application/vnd.github.v3+json'
@@ -608,29 +651,28 @@
       }
 
       try {
-        // Resolve exact latest commit SHA on branch to prevent any stale ref caching across devices
+        // Always resolve the latest commit SHA on `main` (works with or without token on public repos)
+        // so that deleting `hash-log.json` on GitHub is detected immediately without CDN caching.
         let refTarget = branch;
-        if (state.githubToken) {
-          try {
-            const commitRes = await fetch(
-              `https://api.github.com/repos/${owner}/${repo}/commits/${branch}?t=${Date.now()}`,
-              { headers, cache: 'no-store' }
-            );
-            if (commitRes.ok) {
-              const commitData = await commitRes.json();
-              if (commitData && commitData.sha) {
-                refTarget = commitData.sha;
-              }
+        try {
+          const commitRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/commits/${branch}?t=${Date.now()}`,
+            { headers, cache: 'no-store' }
+          );
+          if (commitRes.ok) {
+            const commitData = await commitRes.json();
+            if (commitData && commitData.sha) {
+              refTarget = commitData.sha;
             }
-          } catch (_) {
-            // Fallback to branch name if commit lookup fails
           }
+        } catch (_) {
+          // Fallback to branch name if commit lookup fails
         }
 
         const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${refTarget}&t=${Date.now()}`;
         let res = await fetch(apiUrl, { headers, cache: 'no-store' });
 
-        // If a stale local token caused 401, retry unauthenticated so public `syncKey` from repo can be loaded
+        // If a stale local token caused 401/403, clear it and retry unauthenticated
         if ((res.status === 401 || res.status === 403) && state.githubToken) {
           state.githubToken = '';
           localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
@@ -644,13 +686,26 @@
         }
 
         if (res.status === 404) {
+          // `hash-log.json` was deleted on GitHub -> Reset counter to ReOS-00001 and clear local cache!
           state.githubFileSha = null;
-          if (state.githubToken) {
-            await pushLogToGitHub('Initialisiere hash-log.json (Start bei ReOS-00001)');
+          state.hashRegistry.clear();
+          state.presets.nextNumber = START_INVOICE_NUMBER;
+          localStorage.removeItem(LOCAL_STORAGE_KEY);
+
+          if (allowCreateIfMissing && state.githubToken) {
+            const created = await pushLogToGitHub('Initialisiere hash-log.json (Start bei ReOS-00001)');
+            persistLocalRegistry();
+            updateGithubSyncUI(created ? 'ok' : 'error');
+            updateCounterUI();
+            return created;
           }
-          updateGithubSyncUI(state.githubToken ? 'ok' : 'idle');
+
+          // Clear stored token so the website asks for the token again
+          state.githubToken = '';
+          localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
+          updateGithubSyncUI('idle');
           updateCounterUI();
-          return true;
+          return false;
         }
 
         if (!res.ok) {
@@ -670,20 +725,17 @@
             if (restoredToken) {
               state.githubToken = restoredToken;
               localStorage.setItem(GH_TOKEN_STORAGE_KEY, restoredToken);
-              // Immediately re-fetch authenticated so this device bypasses public CDN cache and gets latest entries!
               if (!isRetryWithToken) {
-                return await syncFromGitHub(true);
+                return await syncFromGitHub({ isRetryWithToken: true, allowCreateIfMissing });
               }
             }
           }
 
-          // When calling `/contents/?ref=<commitSha>`, also fetch the current blob sha on `main` if needed
           const isReOSFile = parsed.prefix === INVOICE_PREFIX;
           mergeEntriesIntoState(parsed.entries, isReOSFile ? parsed.nextNumber : START_INVOICE_NUMBER, isReOSFile);
           persistLocalRegistry();
           updateCounterUI();
 
-          // If we just migrated from old RE-10000 or added syncKey, persist clean ReOS state
           if (state.githubToken && (!isReOSFile || !parsed.syncKey)) {
             await pushLogToGitHub('Aktualisiere auf ReOS-00001 Rechnungskreislauf');
           }
@@ -692,6 +744,7 @@
         return true;
       } catch (err) {
         console.warn('GitHub sync read info:', err);
+        updateGithubSyncUI('error', 'Verbindungsfehler');
         return false;
       }
     }
@@ -779,47 +832,14 @@
       loadLocalRegistry();
       updateCounterUI();
 
-      // Pull `hash-log.json` (including shared syncKey & current ReOS counter) automatically
-      await syncFromGitHub();
+      // Pull `hash-log.json` from GitHub. If it was deleted (404), everything resets to ReOS-00001
+      const logExists = await syncFromGitHub({ allowCreateIfMissing: false });
       updateGithubSyncUI();
 
-      try {
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-          const firebaseConfig = JSON.parse(__firebase_config);
-          const app = initializeApp(firebaseConfig);
-          const auth = getAuth(app);
-          const db = getFirestore(app);
-          state.db = db;
-
-          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } else {
-            await signInAnonymously(auth);
-          }
-
-          onAuthStateChanged(auth, (user) => {
-            state.user = user;
-            if (!user) return;
-
-            const colRef = collection(db, 'artifacts', state.appId, 'public', 'data', 'reos_invoice_hashes');
-            onSnapshot(colRef, (snapshot) => {
-              const cloudEntries = [];
-              snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                if (data && data.hash && data.invoiceNumber) {
-                  cloudEntries.push(data);
-                }
-              });
-              mergeEntriesIntoState(cloudEntries, state.presets.nextNumber);
-              persistLocalRegistry();
-              updateCounterUI();
-            }, (err) => {
-              console.warn('Cloud sync info:', err);
-            });
-          });
-        }
-      } catch (e) {
-        console.warn('Running in standalone GitHub Pages mode:', e);
+      if (!logExists && !state.githubToken && typeof window.__openGithubModal === 'function') {
+        window.__openGithubModal(
+          'hash-log.json wurde auf GitHub zurückgesetzt bzw. noch nicht angelegt (Start bei ReOS-00001). Bitte gib deinen GitHub-Token ein, um den Rechnungskreislauf zu starten.'
+        );
       }
     }
 
@@ -842,15 +862,6 @@
 
       if (state.githubToken) {
         await pushLogToGitHub(`Rechnung ${minimalEntry.invoiceNumber} geloggt`);
-      }
-
-      if (state.db && state.user) {
-        try {
-          const docRef = doc(state.db, 'artifacts', state.appId, 'public', 'data', 'reos_invoice_hashes', minimalEntry.hash);
-          await setDoc(docRef, minimalEntry);
-        } catch (e) {
-          console.warn('Could not persist hash entry to cloud:', e);
-        }
       }
     }
 
@@ -931,6 +942,262 @@
         primaryHash,
         altHashes: allHashes,
         allHashes
+      };
+    }
+
+    // =========================================================================
+    // 5. CLIENT-SIDE PDF TEXT EXTRACTION & SUMUP RECEIPT PARSER
+    // =========================================================================
+    async function extractLinesFromPdfBuffer(arrayBuffer) {
+      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const allLines = [];
+      const rawContentTokensForHash = [];
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+
+        const rawItems = textContent.items
+          .map(item => ({
+            str: (item.str || '').trim(),
+            x: item.transform ? item.transform[4] : 0,
+            y: item.transform ? item.transform[5] : 0
+          }))
+          .filter(it => it.str.length > 0);
+
+        rawItems.sort((a, b) => {
+          if (Math.abs(b.y - a.y) > 3.5) return b.y - a.y;
+          return a.x - b.x;
+        });
+
+        for (const token of rawItems) {
+          rawContentTokensForHash.push(token.str);
+        }
+
+        const rows = [];
+        for (const item of rawItems) {
+          let row = rows.find(r => Math.abs(r.y - item.y) <= 3.5);
+          if (!row) {
+            row = { y: item.y, items: [] };
+            rows.push(row);
+          }
+          row.items.push(item);
+        }
+
+        rows.sort((a, b) => b.y - a.y);
+        for (const row of rows) {
+          row.items.sort((a, b) => a.x - b.x);
+          const lineStr = row.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+          if (lineStr) allLines.push(lineStr);
+        }
+      }
+
+      return { allLines, rawContentTokensForHash };
+    }
+
+    function parseReceiptTextLines(lines) {
+      let orderNo = '';
+      let orderDate = '';
+      let customerName = '';
+      let addressLines = [];
+      const items = [];
+      let subtotalGross = 0;
+      let shippingGross = 0;
+      let taxAmount = 0;
+      let totalGross = 0;
+
+      const fullText = lines.join('\n');
+
+      // 1. Order Number (e.g. "Neue Bestellung #14")
+      const orderMatch = fullText.match(/Bestellung\s*#\s*(\d+)/i);
+      if (orderMatch) {
+        orderNo = orderMatch[1];
+      }
+
+      // 2. Order Date & Customer Name (e.g. "2026/11/10 16:36:00 Katharina Poppe")
+      for (const line of lines) {
+        const dtMatch = line.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})\s+\d{2}:\d{2}(?::\d{2})?\s*(.*)/);
+        if (dtMatch) {
+          orderDate = `${dtMatch[3]}.${dtMatch[2]}.${dtMatch[1]}`;
+          if (dtMatch[4] && dtMatch[4].trim()) {
+            customerName = dtMatch[4].trim();
+          }
+          break;
+        }
+      }
+
+      // 3. Extract Address from "Rechnungsdaten" or "Lieferadresse"
+      const addrSectionHeaders = ['Rechnungsdaten', 'Lieferadresse'];
+      for (const header of addrSectionHeaders) {
+        const idx = lines.findIndex(l => l.toLowerCase().startsWith(header.toLowerCase()));
+        if (idx !== -1) {
+          const collected = [];
+          const firstLineRemainder = lines[idx].slice(header.length).trim();
+          if (firstLineRemainder) collected.push(firstLineRemainder);
+
+          for (let k = idx + 1; k < Math.min(lines.length, idx + 7); k++) {
+            const candidate = lines[k].trim();
+            if (
+              /^(Lieferadresse|Rechnungsdaten|Kundendetails|Zahlungsmethode|Liefermethode|Neue Bestellung|Ihre Bestellung)/i.test(candidate)
+            ) {
+              break;
+            }
+            collected.push(candidate);
+          }
+
+          if (collected.length > 0) {
+            const joined = collected.join(' ');
+            const splitMatch = joined.match(/^(.*?)\s+(\d{5}\s+\S+.*?)\s+(Deutschland|Österreich|Schweiz)$/i);
+            if (splitMatch && collected.length <= 2) {
+              const nameAndStreet = splitMatch[1].trim();
+              const zipCity = splitMatch[2].trim();
+              const country = splitMatch[3].trim();
+              if (customerName && nameAndStreet.startsWith(customerName)) {
+                const street = nameAndStreet.slice(customerName.length).trim();
+                addressLines = [customerName, street, zipCity, country].filter(Boolean);
+              } else {
+                addressLines = [nameAndStreet, zipCity, country];
+              }
+            } else {
+              addressLines = collected;
+            }
+            if (!customerName && addressLines.length > 0) {
+              customerName = addressLines[0];
+            }
+            break;
+          }
+        }
+      }
+
+      if (addressLines.length === 0 && customerName) {
+        addressLines = [customerName, 'Deutschland'];
+      }
+
+      // 4. Extract Ordered Items & Prices
+      const orderStartIdx = lines.findIndex(l => /Ihre Bestellung/i.test(l));
+      const scanLines = orderStartIdx !== -1 ? lines.slice(orderStartIdx + 1) : lines;
+
+      const qtyPriceRegex = /(\d+)\s*[x×]\s*(\d+[.,]\d{2})\s*[€\u20AC\in]?/i;
+      const standalonePriceRegex = /^(\d+[.,]\d{2})\s*[€\u20AC]?$/;
+
+      let pendingTitleParts = [];
+
+      for (let i = 0; i < scanLines.length; i++) {
+        const line = scanLines[i].trim();
+        if (!line) continue;
+
+        if (/^(Zwischensumme|Versand|Steuer|Gesamtbetrag|inkl\.)/i.test(line)) {
+          continue;
+        }
+
+        const qpMatch = line.match(qtyPriceRegex);
+        if (qpMatch) {
+          const qty = parseInt(qpMatch[1], 10) || 1;
+          const unitGross = parseEuroNumber(qpMatch[2]);
+          let totalItemGross = +(qty * unitGross).toFixed(2);
+
+          const afterMatch = line.slice(qpMatch.index + qpMatch[0].length).trim();
+          const sameLineTotal = afterMatch.match(/(\d+[.,]\d{2})\s*[€\u20AC]/);
+          if (sameLineTotal) {
+            totalItemGross = parseEuroNumber(sameLineTotal[1]);
+          } else if (i + 1 < scanLines.length && standalonePriceRegex.test(scanLines[i + 1].trim())) {
+            totalItemGross = parseEuroNumber(scanLines[i + 1].trim());
+            i++;
+          }
+
+          const beforeMatch = line.slice(0, qpMatch.index).trim();
+          if (beforeMatch) pendingTitleParts.push(beforeMatch);
+
+          const cleanTitleParts = pendingTitleParts.filter(
+            p => !/^(Ihre Bestellung|Zwischensumme|Versand|Steuer|Gesamtbetrag|DAS DENUN)$/i.test(p)
+          );
+
+          let finalTitle = cleanTitleParts.length > 0
+            ? cleanTitleParts[0]
+            : `Artikel #${items.length + 1}`;
+
+          if (cleanTitleParts.length >= 2 && cleanTitleParts[0].length < cleanTitleParts[1].length && cleanTitleParts[0] === cleanTitleParts[0].toUpperCase()) {
+            finalTitle = cleanTitleParts[1];
+          }
+
+          items.push({
+            title: finalTitle,
+            qty,
+            unitGross,
+            totalGross: totalItemGross
+          });
+
+          pendingTitleParts = [];
+        } else if (!standalonePriceRegex.test(line)) {
+          pendingTitleParts.push(line);
+        }
+      }
+
+      // 5. Extract Summary Totals (Zwischensumme, Versand, Steuer, Gesamtbetrag)
+      const findAmountForKeyword = (regex) => {
+        for (let i = 0; i < lines.length; i++) {
+          if (regex.test(lines[i])) {
+            const inlinePrices = [...lines[i].matchAll(/(\d+[.,]\d{2})\s*[€\u20AC]/g)];
+            if (inlinePrices.length > 0) {
+              return parseEuroNumber(inlinePrices[inlinePrices.length - 1][1]);
+            }
+            for (let k = i + 1; k <= Math.min(lines.length - 1, i + 4); k++) {
+              const m = lines[k].trim().match(/^(\d+[.,]\d{2})\s*[€\u20AC]?$/);
+              if (m) return parseEuroNumber(m[1]);
+            }
+          }
+        }
+        return null;
+      };
+
+      const inklMatch = fullText.match(/inkl\.\s*(\d+[.,]\d{2})\s*[€\u20AC]?\s*USt/i);
+      if (inklMatch) {
+        taxAmount = parseEuroNumber(inklMatch[1]);
+      }
+
+      const foundSub = findAmountForKeyword(/^Zwischensumme/i);
+      const foundShip = findAmountForKeyword(/^Versand/i);
+      const foundTax = findAmountForKeyword(/^Steuer/i);
+      const foundTotal = findAmountForKeyword(/^Gesamtbetrag/i);
+
+      // Handle grouped block layout ("Zwischensumme" / "Versand" followed by prices)
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (/^Zwischensumme$/i.test(lines[i].trim()) && /^Versand$/i.test(lines[i + 1].trim())) {
+          const subsequentPrices = [];
+          for (let k = i + 2; k < Math.min(lines.length, i + 10); k++) {
+            const pm = lines[k].trim().match(/^(\d+[.,]\d{2})\s*[€\u20AC]?$/);
+            if (pm) subsequentPrices.push(parseEuroNumber(pm[1]));
+          }
+          if (subsequentPrices.length >= 2) {
+            subtotalGross = subsequentPrices[subsequentPrices.length - 2];
+            shippingGross = subsequentPrices[subsequentPrices.length - 1];
+          }
+        }
+      }
+
+      if (!subtotalGross && foundSub !== null) subtotalGross = foundSub;
+      if (!shippingGross && foundShip !== null) shippingGross = foundShip;
+      if (!taxAmount && foundTax !== null) taxAmount = foundTax;
+      if (!totalGross && foundTotal !== null) totalGross = foundTotal;
+
+      const itemsSum = +items.reduce((acc, it) => acc + it.totalGross, 0).toFixed(2);
+      if (!subtotalGross) subtotalGross = itemsSum;
+      if (!totalGross) totalGross = +(subtotalGross + shippingGross).toFixed(2);
+
+      const now = new Date();
+      const todayFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
+
+      return {
+        orderNo: orderNo || 'Unbekannt',
+        invoiceDate: todayFormatted,
+        orderDate: orderDate || todayFormatted,
+        customerName: customerName || (addressLines[0] || 'Kunde'),
+        addressLines: addressLines.length > 0 ? addressLines : ['Kunde', 'Deutschland'],
+        items,
+        subtotalGross,
+        shippingGross,
+        taxAmount,
+        totalGross
       };
     }
 
@@ -1125,9 +1392,17 @@
     // 7. PROCESS UPLOADED RECEIPT (GITHUB SYNC + HASH CHECK + DOWNLOAD)
     // =========================================================================
     async function processReceiptData(parsedData, hashBundle, sourceLabel = 'Beleg') {
-      // Pull the latest hash-log.json from GitHub right before assigning a number
-      // so other devices' invoices from earlier today or last week are guaranteed to be included
-      await syncFromGitHub();
+      // Pull the latest hash-log.json from GitHub right before assigning a number.
+      // If hash-log.json was deleted on GitHub, syncFromGitHub resets the counter & token!
+      const synced = await syncFromGitHub({ allowCreateIfMissing: false });
+      if (!synced && !state.githubToken) {
+        if (typeof window.__openGithubModal === 'function') {
+          window.__openGithubModal(
+            'hash-log.json wurde auf GitHub gelöscht (Reset auf ReOS-00001). Bitte gib deinen GitHub-Token neu ein, um fortzufahren.'
+          );
+        }
+        return;
+      }
 
       const { primaryHash, allHashes } = typeof hashBundle === 'object' && hashBundle !== null
         ? hashBundle
@@ -1674,6 +1949,36 @@
     // =========================================================================
     window.addEventListener('DOMContentLoaded', async () => {
       if (window.lucide) window.lucide.createIcons();
+
+      // GitHub Token Modal Logic (registered before initStorage so a 404 reset can open it immediately)
+      const githubModal = document.getElementById('githubTokenModal');
+      const githubTokenInput = document.getElementById('githubTokenInput');
+      const githubModalStatus = document.getElementById('githubModalStatus');
+
+      function openGithubModal(promptReason = '') {
+        if (githubTokenInput) {
+          githubTokenInput.value = state.githubToken || '';
+        }
+        if (githubModalStatus) {
+          if (promptReason) {
+            githubModalStatus.textContent = promptReason;
+            githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-amber-50 text-amber-800 border border-amber-200 block';
+          } else {
+            githubModalStatus.className = 'hidden';
+          }
+        }
+        githubModal.classList.remove('hidden');
+        githubModal.classList.add('flex');
+        if (window.lucide) window.lucide.createIcons();
+      }
+
+      function closeGithubModal() {
+        githubModal.classList.add('hidden');
+        githubModal.classList.remove('flex');
+      }
+
+      window.__openGithubModal = openGithubModal;
+
       await initLogo();
       await initStorage();
 
@@ -1710,33 +2015,6 @@
         fileInput.value = '';
       });
 
-      // GitHub Token Modal Logic
-      const githubModal = document.getElementById('githubTokenModal');
-      const githubTokenInput = document.getElementById('githubTokenInput');
-      const githubModalStatus = document.getElementById('githubModalStatus');
-
-      function openGithubModal(promptReason = '') {
-        if (githubTokenInput) {
-          githubTokenInput.value = state.githubToken || '';
-        }
-        if (githubModalStatus) {
-          if (promptReason) {
-            githubModalStatus.textContent = promptReason;
-            githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-amber-50 text-amber-800 border border-amber-200 block';
-          } else {
-            githubModalStatus.className = 'hidden';
-          }
-        }
-        githubModal.classList.remove('hidden');
-        githubModal.classList.add('flex');
-        if (window.lucide) window.lucide.createIcons();
-      }
-
-      function closeGithubModal() {
-        githubModal.classList.add('hidden');
-        githubModal.classList.remove('flex');
-      }
-
       document.getElementById('githubSyncBtn')?.addEventListener('click', () => openGithubModal());
       document.getElementById('closeGithubModalBtn')?.addEventListener('click', closeGithubModal);
 
@@ -1757,11 +2035,11 @@
           githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-blue-50 text-blue-800 border border-blue-200 block';
         }
 
-        const ok = await syncFromGitHub();
+        const ok = await syncFromGitHub({ allowCreateIfMissing: true });
         const pushed = await pushLogToGitHub('Initialisiere ReOS-00001 Rechnungskreislauf für alle Geräte');
         if (ok && pushed) {
           closeGithubModal();
-          showBanner('success', 'Einrichtung abgeschlossen!', 'Ab sofort können alle Nutzer auf beliebigen Geräten einfach https://diskettencoder.github.io/KJP/ öffnen und nahtlos weiterarbeiten.');
+          showBanner('success', 'Einrichtung abgeschlossen!', 'Der Rechnungskreislauf startet bei ReOS-00001 und ist auf allen Geräten synchron.');
           if (state.pendingFilesAfterToken) {
             const pending = state.pendingFilesAfterToken;
             state.pendingFilesAfterToken = null;
@@ -1775,9 +2053,13 @@
 
       document.getElementById('clearGithubTokenBtn')?.addEventListener('click', () => {
         state.githubToken = '';
+        state.hashRegistry.clear();
+        state.presets.nextNumber = START_INVOICE_NUMBER;
         localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
         if (githubTokenInput) githubTokenInput.value = '';
         updateGithubSyncUI();
+        updateCounterUI();
         closeGithubModal();
       });
 
@@ -1788,15 +2070,12 @@
           return;
         }
 
-        // First make sure we pulled the shared syncKey from hash-log.json if available
-        if (!state.githubToken) {
-          await syncFromGitHub();
-        }
+        // Always verify with GitHub first so deleting `hash-log.json` resets immediately
+        await syncFromGitHub({ allowCreateIfMissing: false });
 
-        // Only if the repo has never been initialized once at all, ask the admin once
         if (!state.githubToken) {
           state.pendingFilesAfterToken = pdfFiles;
-          openGithubModal('Bitte aktiviere hier ein einziges Mal das GitHub-Log mit deinem Token. Danach brauchen andere Geräte oder Nutzer nichts mehr einzugeben.');
+          openGithubModal('Bitte gib deinen GitHub-Token ein, um das GitHub-Log (hash-log.json) neu zu starten.');
           return;
         }
 
