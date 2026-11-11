@@ -1602,9 +1602,6 @@
                 <span class="text-slate-600">Rechnungsdatum</span>
                 <span class="text-right">${model.invoiceDate}</span>
 
-                <span class="text-slate-600">Bestelldatum</span>
-                <span class="text-right">${model.orderDate}</span>
-
                 <span class="text-slate-600">Ihr Ansprechpartner</span>
                 <span class="text-right">${p.contactPerson}</span>
               </div>
@@ -1747,7 +1744,6 @@
       const metaPairs = [
         ['Rechnungs-Nr.', model.invoiceNumber],
         ['Rechnungsdatum', model.invoiceDate],
-        ['Bestelldatum', model.orderDate],
         ['Ihr Ansprechpartner', p.contactPerson]
       ];
       doc.setFontSize(9);
