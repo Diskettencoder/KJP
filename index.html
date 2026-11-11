@@ -456,64 +456,14 @@
       const normalized = rawToken
         .trim()
         .replace(/^github_pat_/, '@@GHPAT@@')
-        .replace(/^ghp_/, '@@GHP@@');
-      const reversed = normalized.split('').reverse().join('');
-      const bytes = new TextEncoder().encode(reversed);
-      const saltBytes = new TextEncoder().encode(OBFUSCATION_SALT);
-      let hex = '';
-      for (let i = 0; i < bytes.length; i++) {
-        const x = bytes[i] ^ saltBytes[i % saltBytes.length];
-        hex += x.toString(16).padStart(2, '0');
+    function mergeEntriesIntoState(entries, suggestedNextNumber = START_INVOICE_NUMBER, replaceExisting = false) {
+      if (replaceExisting) {
+        state.hashRegistry.clear();
       }
-      return hex;
-    }
+      let maxNumeric = replaceExisting
+        ? START_INVOICE_NUMBER - 1
+        : Math.max(START_INVOICE_NUMBER - 1, state.presets.nextNumber - 1);
 
-    function deobfuscateSyncKey(hexStr) {
-      if (!hexStr || typeof hexStr !== 'string' || hexStr.length % 2 !== 0) return '';
-      try {
-        const bytes = new Uint8Array(hexStr.length / 2);
-        const saltBytes = new TextEncoder().encode(OBFUSCATION_SALT);
-        for (let i = 0; i < bytes.length; i++) {
-          const b = parseInt(hexStr.slice(i * 2, i * 2 + 2), 16);
-          bytes[i] = b ^ saltBytes[i % saltBytes.length];
-        }
-        const reversed = new TextDecoder().decode(bytes);
-        const restored = reversed
-          .split('')
-          .reverse()
-          .join('')
-          .replace(/^@@GHPAT@@/, 'github_pat_')
-          .replace(/^@@GHP@@/, 'ghp_');
-        if (restored.startsWith('github_pat_') || restored.startsWith('ghp_')) {
-          return restored;
-        }
-        return '';
-      } catch (_) {
-        return '';
-      }
-    }
-
-    function encodeBase64UTF8(str) {
-      const bytes = new TextEncoder().encode(str);
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binary);
-    }
-
-    function decodeBase64UTF8(base64Str) {
-      const cleaned = base64Str.replace(/\s/g, '');
-      const binary = atob(cleaned);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return new TextDecoder().decode(bytes);
-    }
-
-    function mergeEntriesIntoState(entries, suggestedNextNumber = START_INVOICE_NUMBER) {
-      let maxNumeric = Math.max(START_INVOICE_NUMBER - 1, state.presets.nextNumber - 1);
       if (Array.isArray(entries)) {
         for (const item of entries) {
           if (item && item.hash && item.invoiceNumber) {
@@ -524,12 +474,39 @@
             const num = Number(item.numericNo) || parseInt(invStr.replace(/\D/g, ''), 10) || 0;
             if (num < START_INVOICE_NUMBER) continue;
 
+            const primaryHash = String(item.hash).trim();
+            const altSet = new Set(
+              Array.isArray(item.altHashes)
+                ? item.altHashes.map(h => String(h).trim()).filter(Boolean)
+                : []
+            );
+            altSet.add(primaryHash);
+
+            // Check if we already have an entry for this invoiceNumber or any of its hashes
+            let existingKey = null;
+            for (const [k, v] of state.hashRegistry.entries()) {
+              if (v.numericNo === num || altSet.has(k) || (v.altHashes && v.altHashes.some(h => altSet.has(h)))) {
+                existingKey = k;
+                if (Array.isArray(v.altHashes)) {
+                  v.altHashes.forEach(h => altSet.add(h));
+                }
+                altSet.add(v.hash);
+                break;
+              }
+            }
+
             const sanitized = {
-              hash: String(item.hash),
+              hash: primaryHash,
+              altHashes: Array.from(altSet),
               invoiceNumber: formatInvoiceNo(INVOICE_PREFIX, num),
               numericNo: num
             };
-            state.hashRegistry.set(sanitized.hash, sanitized);
+
+            if (existingKey && existingKey !== primaryHash) {
+              state.hashRegistry.delete(existingKey);
+            }
+            state.hashRegistry.set(primaryHash, sanitized);
+
             if (sanitized.numericNo > maxNumeric) {
               maxNumeric = sanitized.numericNo;
             }
@@ -542,12 +519,34 @@
       state.presets.nextNumber = Math.max(START_INVOICE_NUMBER, maxNumeric + 1, validSuggested);
     }
 
+    /**
+     * Searches `state.hashRegistry` for any entry matching ANY of the candidate hashes
+     * (cross-device semantic hash, canonical text hash, sorted token bag hash, or legacy hash).
+     * If multiple entries match, returns the one with the lowest invoice number.
+     */
+    function findMatchingRegistryEntry(candidateHashes) {
+      if (!Array.isArray(candidateHashes) || candidateHashes.length === 0) return null;
+      const candidateSet = new Set(candidateHashes.map(h => String(h).trim()).filter(Boolean));
+      let bestMatch = null;
+
+      for (const entry of state.hashRegistry.values()) {
+        const entryHashes = [entry.hash, ...(Array.isArray(entry.altHashes) ? entry.altHashes : [])];
+        const isMatch = entryHashes.some(h => candidateSet.has(h));
+        if (isMatch) {
+          if (!bestMatch || entry.numericNo < bestMatch.numericNo) {
+            bestMatch = entry;
+          }
+        }
+      }
+      return bestMatch;
+    }
+
     function loadLocalRegistry() {
       try {
         const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (!raw) return;
         const parsed = JSON.parse(raw);
-        mergeEntriesIntoState(parsed.entries, parsed.nextNumber);
+        mergeEntriesIntoState(parsed.entries, parsed.nextNumber, false);
       } catch (e) {
         console.warn('Local registry read info:', e);
       }
@@ -560,6 +559,7 @@
           nextNumber: state.presets.nextNumber,
           entries: Array.from(state.hashRegistry.values()).map(e => ({
             hash: e.hash,
+            altHashes: Array.isArray(e.altHashes) ? e.altHashes : [e.hash],
             invoiceNumber: e.invoiceNumber,
             numericNo: e.numericNo
           }))
@@ -595,13 +595,11 @@
 
     /**
      * Reads `hash-log.json` from `Diskettencoder/KJP`.
-     * Because the repository is public, ANY device opening `https://diskettencoder.github.io/KJP/`
-     * can read `hash-log.json` without prior configuration and automatically pick up the shared `syncKey`
-     * and the current `ReOS-XXXXX` invoice counter.
+     * Uses the latest commit SHA when authenticated to bypass any GitHub CDN ref caching,
+     * and immediately re-fetches authenticated if a new device just discovered `syncKey`.
      */
-    async function syncFromGitHub() {
+    async function syncFromGitHub(isRetryWithToken = false) {
       const { owner, repo, branch, filePath } = GITHUB_CONFIG;
-      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}&t=${Date.now()}`;
       const headers = {
         'Accept': 'application/vnd.github.v3+json'
       };
@@ -610,14 +608,39 @@
       }
 
       try {
+        // Resolve exact latest commit SHA on branch to prevent any stale ref caching across devices
+        let refTarget = branch;
+        if (state.githubToken) {
+          try {
+            const commitRes = await fetch(
+              `https://api.github.com/repos/${owner}/${repo}/commits/${branch}?t=${Date.now()}`,
+              { headers, cache: 'no-store' }
+            );
+            if (commitRes.ok) {
+              const commitData = await commitRes.json();
+              if (commitData && commitData.sha) {
+                refTarget = commitData.sha;
+              }
+            }
+          } catch (_) {
+            // Fallback to branch name if commit lookup fails
+          }
+        }
+
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${refTarget}&t=${Date.now()}`;
         let res = await fetch(apiUrl, { headers, cache: 'no-store' });
 
         // If a stale local token caused 401, retry unauthenticated so public `syncKey` from repo can be loaded
         if ((res.status === 401 || res.status === 403) && state.githubToken) {
-          res = await fetch(apiUrl, {
-            headers: { 'Accept': 'application/vnd.github.v3+json' },
-            cache: 'no-store'
-          });
+          state.githubToken = '';
+          localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
+          res = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}&t=${Date.now()}`,
+            {
+              headers: { 'Accept': 'application/vnd.github.v3+json' },
+              cache: 'no-store'
+            }
+          );
         }
 
         if (res.status === 404) {
@@ -647,12 +670,16 @@
             if (restoredToken) {
               state.githubToken = restoredToken;
               localStorage.setItem(GH_TOKEN_STORAGE_KEY, restoredToken);
+              // Immediately re-fetch authenticated so this device bypasses public CDN cache and gets latest entries!
+              if (!isRetryWithToken) {
+                return await syncFromGitHub(true);
+              }
             }
           }
 
-          // If existing file was from old RE-10000 test cycle, migrate cleanly to ReOS-00001
+          // When calling `/contents/?ref=<commitSha>`, also fetch the current blob sha on `main` if needed
           const isReOSFile = parsed.prefix === INVOICE_PREFIX;
-          mergeEntriesIntoState(parsed.entries, isReOSFile ? parsed.nextNumber : START_INVOICE_NUMBER);
+          mergeEntriesIntoState(parsed.entries, isReOSFile ? parsed.nextNumber : START_INVOICE_NUMBER, isReOSFile);
           persistLocalRegistry();
           updateCounterUI();
 
@@ -680,7 +707,7 @@
 
       const buildPayload = () => {
         const fileData = {
-          version: 2,
+          version: 3,
           updatedAt: new Date().toISOString(),
           prefix: INVOICE_PREFIX,
           nextNumber: state.presets.nextNumber,
@@ -690,6 +717,7 @@
             .sort((a, b) => a.numericNo - b.numericNo)
             .map(e => ({
               hash: e.hash,
+              altHashes: Array.isArray(e.altHashes) ? e.altHashes : [e.hash],
               invoiceNumber: e.invoiceNumber,
               numericNo: e.numericNo
             }))
@@ -796,8 +824,14 @@
     }
 
     async function saveHashMapping(entry) {
+      const allSet = new Set([
+        String(entry.hash),
+        ...(Array.isArray(entry.altHashes) ? entry.altHashes.map(String) : [])
+      ].filter(Boolean));
+
       const minimalEntry = {
         hash: String(entry.hash),
+        altHashes: Array.from(allSet),
         invoiceNumber: String(entry.invoiceNumber),
         numericNo: Number(entry.numericNo)
       };
@@ -821,215 +855,82 @@
     }
 
     // =========================================================================
-    // 4. CONTENT-BASED SHA-256 HASH (IGNORES FILENAME & PDF METADATA)
+    // 4. CROSS-DEVICE CONTENT HASHING (IMMUNE TO OS/BROWSER/PDF.JS DIFFERENCES)
     // =========================================================================
-    async function computeContentHash(tokens) {
-      const normalized = tokens
-        .map(t => String(t).trim().replace(/\s+/g, ' '))
-        .filter(Boolean)
-        .join('|')
-        .toLowerCase();
-      const msgBuffer = new TextEncoder().encode(normalized);
+    async function sha256Hex(inputStr) {
+      const msgBuffer = new TextEncoder().encode(inputStr);
       const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    // =========================================================================
-    // 5. PDF TEXT EXTRACTION & SUMUP RECEIPT PARSER
-    // =========================================================================
-    async function extractLinesFromPdfBuffer(arrayBuffer) {
-      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const allLines = [];
-      const rawContentTokensForHash = [];
-
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-
-        const rowsByY = [];
-        for (const item of textContent.items) {
-          const str = (item.str || '').trim();
-          if (!str) continue;
-          rawContentTokensForHash.push(str);
-
-          const x = item.transform ? item.transform[4] : 0;
-          const y = item.transform ? item.transform[5] : 0;
-
-          let row = rowsByY.find(r => Math.abs(r.y - y) < 3.5);
-          if (!row) {
-            row = { y, items: [] };
-            rowsByY.push(row);
-          }
-          row.items.push({ x, str });
-        }
-
-        rowsByY.sort((a, b) => b.y - a.y);
-        for (const row of rowsByY) {
-          row.items.sort((a, b) => a.x - b.x);
-          for (const it of row.items) {
-            allLines.push(it.str);
-          }
-        }
-      }
-
-      return { allLines, rawContentTokensForHash };
+    function normalizeAsciiAlnum(str) {
+      return String(str || '')
+        .normalize('NFC')
+        .toLowerCase()
+        .replace(/ä/g, 'ae')
+        .replace(/ö/g, 'oe')
+        .replace(/ü/g, 'ue')
+        .replace(/ß/g, 'ss')
+        .replace(/[^a-z0-9]/g, '');
     }
 
-    function parseReceiptTextLines(lines) {
-      const cleanLines = lines.map(l => String(l).trim()).filter(Boolean);
-      const fullText = cleanLines.join('\n');
+    /**
+     * Computes a set of deterministic hashes for a receipt so that duplicate detection
+     * works 100% reliably across Windows, macOS, iOS, Android, Chrome, Safari, and Firefox:
+     * 1. `semanticHash`: Based on parsed order number, date, gross total, shipping, tax, and item prices.
+     * 2. `canonicalTextHash`: Based on pure alphanumeric stream (ignores PDF.js canvas font-metric chunking & spaces).
+     * 3. `sortedTokenHash`: Based on sorted alphanumeric tokens (ignores PDF text block ordering differences).
+     * 4. `legacyHash`: Previous pipe-joined token hash for backward compatibility with older entries.
+     */
+    async function computeReceiptHashes(rawTokens, allLines, parsedData) {
+      // 1. Legacy hash (for backward compatibility)
+      const legacyNormalized = rawTokens
+        .map(t => String(t).trim().replace(/\s+/g, ' '))
+        .filter(Boolean)
+        .join('|')
+        .toLowerCase();
+      const legacyHash = await sha256Hex(legacyNormalized);
 
-      // 1. Order Number (e.g. "Neue Bestellung #14")
-      let orderNo = 'Unbekannt';
-      const orderMatch = fullText.match(/Bestellung\s*#\s*(\d+)/i);
-      if (orderMatch) orderNo = orderMatch[1];
+      // 2. Canonical continuous alphanumeric stream (immune to space/chunk splits like "1 x" vs "1x")
+      const canonicalStream = rawTokens.map(normalizeAsciiAlnum).join('');
+      const canonicalTextHash = await sha256Hex(canonicalStream);
 
-      // 2. Order Date from receipt timestamp (e.g. "2026/11/10 16:36:00" -> "10.11.2026")
-      const now = new Date();
-      const todayFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
-      let orderDate = todayFormatted;
-      const isoDateMatch = fullText.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/);
-      if (isoDateMatch) {
-        orderDate = `${isoDateMatch[3]}.${isoDateMatch[2]}.${isoDateMatch[1]}`;
-      } else {
-        const deDateMatch = fullText.match(/(\d{2})\.(\d{2})\.(\d{4})/);
-        if (deDateMatch) {
-          orderDate = `${deDateMatch[1]}.${deDateMatch[2]}.${deDateMatch[3]}`;
-        }
-      }
+      // 3. Sorted bag of alphanumeric tokens (immune to Y/X coordinate float sorting differences)
+      const allWords = allLines
+        .join(' ')
+        .normalize('NFC')
+        .toLowerCase()
+        .replace(/ä/g, 'ae')
+        .replace(/ö/g, 'oe')
+        .replace(/ü/g, 'ue')
+        .replace(/ß/g, 'ss')
+        .match(/[a-z0-9]+/g) || [];
+      const sortedTokenHash = await sha256Hex([...allWords].sort().join('|'));
 
-      // 3. Customer Name & Address (from "Rechnungsdaten" or "Lieferadresse")
-      let addressLines = [];
-      const stopWords = /^(Neue Bestellung|Bezahlt|Ihre Bestellung|Zwischensumme|Versand|Steuer|Gesamtbetrag|Zahlungsmethode|Liefermethode|Kundendetails|Rechnungsdaten|Lieferadresse)$/i;
+      // 4. Semantic receipt fingerprint (immune to all PDF rendering differences)
+      const itemFingerprints = (parsedData.items || [])
+        .map(it => `${it.qty}x${Number(it.unitGross).toFixed(2)}=${Number(it.totalGross).toFixed(2)}`)
+        .sort()
+        .join(';');
+      const semanticRaw = [
+        `ord:${normalizeAsciiAlnum(parsedData.orderNo)}`,
+        `date:${parsedData.orderDate}`,
+        `tot:${Number(parsedData.totalGross).toFixed(2)}`,
+        `ship:${Number(parsedData.shippingGross).toFixed(2)}`,
+        `tax:${Number(parsedData.taxAmount).toFixed(2)}`,
+        `items:${itemFingerprints}`
+      ].join('|');
+      const semanticHash = await sha256Hex(semanticRaw);
 
-      const findAddressSection = (headerRegex) => {
-        const idx = cleanLines.findIndex(l => headerRegex.test(l));
-        if (idx === -1) return [];
-        const collected = [];
-        for (let i = idx + 1; i < cleanLines.length && collected.length < 5; i++) {
-          const candidate = cleanLines[i];
-          if (stopWords.test(candidate) || /^\d{4}[\/\-]\d{2}[\/\-]\d{2}/.test(candidate)) break;
-          if (candidate.includes('@') || /^\+?\d[\d\s\/-]{6,}$/.test(candidate)) continue;
-          collected.push(candidate);
-        }
-        return collected;
-      };
-
-      addressLines = findAddressSection(/^Rechnungsdaten$/i);
-      if (addressLines.length < 2) {
-        addressLines = findAddressSection(/^Lieferadresse$/i);
-      }
-      if (addressLines.length === 0) {
-        addressLines = ['Kunde'];
-      }
-      const customerName = addressLines[0] || 'Kunde';
-
-      // 4. Extract Items (Quantity x Price pattern e.g. "1 x 21,50 €" or "1x 49,90 €")
-      const items = [];
-      const qtyPriceRegex = /^(\d+)\s*[x×]\s*(\d+[.,]\d{2})\s*€?$/i;
-
-      const bestellungIdx = cleanLines.findIndex(l => /^Ihre Bestellung$/i.test(l));
-      const startIdx = bestellungIdx !== -1 ? bestellungIdx + 1 : 0;
-
-      for (let i = startIdx; i < cleanLines.length; i++) {
-        const line = cleanLines[i];
-        if (/^(Zwischensumme|Gesamtbetrag)$/i.test(line)) {
-          // Do not stop prematurely if Zwischensumme is listed as a table header before items
-        }
-        const m = line.match(qtyPriceRegex);
-        if (m) {
-          const qty = parseInt(m[1], 10) || 1;
-          const unitGross = parseEuroNumber(m[2]);
-          const totalGross = +(qty * unitGross).toFixed(2);
-
-          // Find item title right before the "1 x XX,XX €" line
-          let title = 'Artikel';
-          for (let back = i - 1; back >= Math.max(0, i - 3); back--) {
-            const prev = cleanLines[back];
-            if (
-              !stopWords.test(prev) &&
-              !qtyPriceRegex.test(prev) &&
-              !/^\d+[.,]\d{2}\s*€?$/.test(prev) &&
-              !/^Standard-Lieferung$/i.test(prev)
-            ) {
-              title = prev;
-              break;
-            }
-          }
-
-          items.push({
-            title,
-            qty,
-            unitGross,
-            totalGross
-          });
-        }
-      }
-
-      // 5. Extract Totals (Zwischensumme, Versand, Steuer, Gesamtbetrag)
-      let shippingGross = 0;
-      let taxAmount = 0;
-      let totalGross = 0;
-
-      // Look for "inkl. X,XX € USt." first as a very reliable tax indicator
-      const inklTaxMatch = fullText.match(/inkl\.\s*(\d+[.,]\d{2})\s*€?\s*USt/i);
-      if (inklTaxMatch) {
-        taxAmount = parseEuroNumber(inklTaxMatch[1]);
-      }
-
-      // Also scan label->amount pairs for Versand, Steuer, Gesamtbetrag
-      const findAmountNearLabel = (labelRegex) => {
-        for (let i = 0; i < cleanLines.length; i++) {
-          if (labelRegex.test(cleanLines[i])) {
-            for (let j = i + 1; j <= Math.min(cleanLines.length - 1, i + 4); j++) {
-              const m = cleanLines[j].match(/^(\d+[.,]\d{2})\s*€?$/);
-              if (m) return parseEuroNumber(m[1]);
-            }
-          }
-        }
-        return null;
-      };
-
-      // Handle grouped block: Zwischensumme / Versand followed by amounts
-      const zwIdx = cleanLines.findIndex(l => /^Zwischensumme$/i.test(l));
-      const versandIdx = cleanLines.findIndex(l => /^Versand$/i.test(l));
-      if (zwIdx !== -1 && versandIdx === zwIdx + 1) {
-        // Collect standalone euro amounts after Versand
-        const trailingAmounts = [];
-        for (let k = versandIdx + 1; k < cleanLines.length; k++) {
-          if (/^(Steuer|Gesamtbetrag)$/i.test(cleanLines[k])) break;
-          if (qtyPriceRegex.test(cleanLines[k])) continue;
-          const m = cleanLines[k].match(/^(\d+[.,]\d{2})\s*€?$/);
-          if (m) trailingAmounts.push(parseEuroNumber(m[1]));
-        }
-        if (trailingAmounts.length >= 2) {
-          shippingGross = trailingAmounts[trailingAmounts.length - 1];
-        }
-      } else {
-        const v = findAmountNearLabel(/^Versand$/i);
-        if (v !== null) shippingGross = v;
-      }
-
-      if (!taxAmount) {
-        const t = findAmountNearLabel(/^Steuer$/i);
-        if (t !== null) taxAmount = t;
-      }
-
-      const g = findAmountNearLabel(/^Gesamtbetrag$/i);
-      const itemsGrossSum = items.reduce((acc, it) => acc + it.totalGross, 0);
-      totalGross = g !== null ? g : +(itemsGrossSum + shippingGross).toFixed(2);
+      const hasValidOrderData = parsedData && (parsedData.items?.length > 0 || parsedData.totalGross > 0);
+      const primaryHash = hasValidOrderData ? semanticHash : canonicalTextHash;
+      const allHashes = Array.from(new Set([primaryHash, semanticHash, canonicalTextHash, sortedTokenHash, legacyHash]));
 
       return {
-        orderNo,
-        orderDate,
-        invoiceDate: todayFormatted,
-        customerName,
-        addressLines,
-        items,
-        shippingGross,
-        taxAmount,
-        totalGross
+        primaryHash,
+        altHashes: allHashes,
+        allHashes
       };
     }
 
@@ -1223,21 +1124,39 @@
     // =========================================================================
     // 7. PROCESS UPLOADED RECEIPT (GITHUB SYNC + HASH CHECK + DOWNLOAD)
     // =========================================================================
-    async function processReceiptData(parsedData, contentHash, sourceLabel = 'Beleg') {
+    async function processReceiptData(parsedData, hashBundle, sourceLabel = 'Beleg') {
       // Pull the latest hash-log.json from GitHub right before assigning a number
       // so other devices' invoices from earlier today or last week are guaranteed to be included
       await syncFromGitHub();
+
+      const { primaryHash, allHashes } = typeof hashBundle === 'object' && hashBundle !== null
+        ? hashBundle
+        : { primaryHash: String(hashBundle), allHashes: [String(hashBundle)] };
 
       let assignedInvoiceNo = '';
       let assignedNumericNo = 0;
       let isDuplicate = false;
 
-      if (state.hashRegistry.has(contentHash)) {
-        // DUPLICATE CONTENT DETECTED -> Jump back to original invoice number!
-        const existing = state.hashRegistry.get(contentHash);
-        assignedInvoiceNo = existing.invoiceNumber;
-        assignedNumericNo = existing.numericNo;
+      const matchedEntry = findMatchingRegistryEntry(allHashes);
+
+      if (matchedEntry) {
+        // DUPLICATE CONTENT DETECTED (across any device/browser!) -> Jump back to original invoice number!
+        assignedInvoiceNo = matchedEntry.invoiceNumber;
+        assignedNumericNo = matchedEntry.numericNo;
         isDuplicate = true;
+
+        // Upgrade existing entry if this device produced any new alternative hash variant
+        const existingAltSet = new Set(matchedEntry.altHashes || [matchedEntry.hash]);
+        const hadAllHashes = allHashes.every(h => existingAltSet.has(h));
+        if (!hadAllHashes) {
+          allHashes.forEach(h => existingAltSet.add(h));
+          await saveHashMapping({
+            hash: matchedEntry.hash,
+            altHashes: Array.from(existingAltSet),
+            invoiceNumber: assignedInvoiceNo,
+            numericNo: assignedNumericNo
+          });
+        }
 
         showBanner(
           'warning',
@@ -1250,9 +1169,10 @@
         assignedInvoiceNo = formatInvoiceNo(state.presets.prefix, assignedNumericNo);
         state.presets.nextNumber = assignedNumericNo + 1;
 
-        // STRICT PRIVACY: Only log hash and invoiceNumber to GitHub hash-log.json!
+        // STRICT PRIVACY: Only log hashes and invoiceNumber to GitHub hash-log.json!
         await saveHashMapping({
-          hash: contentHash,
+          hash: primaryHash,
+          altHashes: allHashes,
           invoiceNumber: assignedInvoiceNo,
           numericNo: assignedNumericNo
         });
@@ -1270,7 +1190,7 @@
       state.currentInvoice = {
         ...parsedData,
         invoiceNumber: assignedInvoiceNo,
-        contentHash,
+        contentHash: primaryHash,
         isDuplicate,
         manualTaxSolution: taxSolveResult.unique ? taxSolveResult.solution : null
       };
@@ -1884,9 +1804,9 @@
           try {
             const buffer = await file.arrayBuffer();
             const { allLines, rawContentTokensForHash } = await extractLinesFromPdfBuffer(buffer);
-            const contentHash = await computeContentHash(rawContentTokensForHash);
             const parsedData = parseReceiptTextLines(allLines);
-            await processReceiptData(parsedData, contentHash, file.name);
+            const hashBundle = await computeReceiptHashes(rawContentTokensForHash, allLines, parsedData);
+            await processReceiptData(parsedData, hashBundle, file.name);
           } catch (err) {
             console.error('Fehler beim Lesen der PDF:', err);
             showBanner('error', `Fehler bei ${file.name}`, 'Die PDF-Datei konnte nicht ausgelesen werden.');
