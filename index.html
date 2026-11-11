@@ -518,32 +518,27 @@
             if (num < START_INVOICE_NUMBER) continue;
 
             const primaryHash = String(item.hash).trim();
-            const altSet = new Set(
-              Array.isArray(item.altHashes)
-                ? item.altHashes.map(h => String(h).trim()).filter(Boolean)
-                : []
-            );
-            altSet.add(primaryHash);
+            const altList = Array.isArray(item.altHashes)
+              ? item.altHashes.map(h => String(h).trim()).filter(h => h && h !== primaryHash)
+              : [];
 
-            // Check if we already have an entry for this invoiceNumber or any of its hashes
+            // Check if we already have an entry for this invoiceNumber
             let existingKey = null;
             for (const [k, v] of state.hashRegistry.entries()) {
-              if (v.numericNo === num || altSet.has(k) || (v.altHashes && v.altHashes.some(h => altSet.has(h)))) {
+              if (v.numericNo === num || k === primaryHash) {
                 existingKey = k;
-                if (Array.isArray(v.altHashes)) {
-                  v.altHashes.forEach(h => altSet.add(h));
-                }
-                altSet.add(v.hash);
                 break;
               }
             }
 
             const sanitized = {
               hash: primaryHash,
-              altHashes: Array.from(altSet),
               invoiceNumber: formatInvoiceNo(INVOICE_PREFIX, num),
               numericNo: num
             };
+            if (altList.length > 0) {
+              sanitized.altHashes = Array.from(new Set(altList));
+            }
 
             if (existingKey && existingKey !== primaryHash) {
               state.hashRegistry.delete(existingKey);
@@ -600,12 +595,17 @@
         const payload = {
           prefix: state.presets.prefix,
           nextNumber: state.presets.nextNumber,
-          entries: Array.from(state.hashRegistry.values()).map(e => ({
-            hash: e.hash,
-            altHashes: Array.isArray(e.altHashes) ? e.altHashes : [e.hash],
-            invoiceNumber: e.invoiceNumber,
-            numericNo: e.numericNo
-          }))
+          entries: Array.from(state.hashRegistry.values()).map(e => {
+            const item = {
+              hash: e.hash,
+              invoiceNumber: e.invoiceNumber,
+              numericNo: e.numericNo
+            };
+            if (Array.isArray(e.altHashes) && e.altHashes.length > 0) {
+              item.altHashes = e.altHashes;
+            }
+            return item;
+          })
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
       } catch (e) {
@@ -768,12 +768,17 @@
           entries: Array.from(state.hashRegistry.values())
             .filter(e => String(e.invoiceNumber).startsWith(INVOICE_PREFIX))
             .sort((a, b) => a.numericNo - b.numericNo)
-            .map(e => ({
-              hash: e.hash,
-              altHashes: Array.isArray(e.altHashes) ? e.altHashes : [e.hash],
-              invoiceNumber: e.invoiceNumber,
-              numericNo: e.numericNo
-            }))
+            .map(e => {
+              const item = {
+                hash: e.hash,
+                invoiceNumber: e.invoiceNumber,
+                numericNo: e.numericNo
+              };
+              if (Array.isArray(e.altHashes) && e.altHashes.length > 0) {
+                item.altHashes = e.altHashes;
+              }
+              return item;
+            })
         };
         const body = {
           message: commitReason,
@@ -844,14 +849,13 @@
     }
 
     async function saveHashMapping(entry) {
-      const allSet = new Set([
-        String(entry.hash),
-        ...(Array.isArray(entry.altHashes) ? entry.altHashes.map(String) : [])
-      ].filter(Boolean));
+      if (entry.oldHashKey && entry.oldHashKey !== entry.hash) {
+        state.hashRegistry.delete(entry.oldHashKey);
+      }
 
+      // Store ONLY the single current hash without any altHashes bloat
       const minimalEntry = {
         hash: String(entry.hash),
-        altHashes: Array.from(allSet),
         invoiceNumber: String(entry.invoiceNumber),
         numericNo: Number(entry.numericNo)
       };
@@ -1460,14 +1464,12 @@
         assignedNumericNo = matchedEntry.numericNo;
         isDuplicate = true;
 
-        // Upgrade existing entry if this device produced any new alternative hash variant
-        const existingAltSet = new Set(matchedEntry.altHashes || [matchedEntry.hash]);
-        const hadAllHashes = allHashes.every(h => existingAltSet.has(h));
-        if (!hadAllHashes) {
-          allHashes.forEach(h => existingAltSet.add(h));
+        // Clean up legacy hash or altHashes array as soon as the current primaryHash is known
+        const hasLegacyAltHashes = Array.isArray(matchedEntry.altHashes) && matchedEntry.altHashes.length > 0;
+        if (matchedEntry.hash !== primaryHash || hasLegacyAltHashes) {
           await saveHashMapping({
-            hash: matchedEntry.hash,
-            altHashes: Array.from(existingAltSet),
+            oldHashKey: matchedEntry.hash,
+            hash: primaryHash,
             invoiceNumber: assignedInvoiceNo,
             numericNo: assignedNumericNo
           });
@@ -1484,10 +1486,9 @@
         assignedInvoiceNo = formatInvoiceNo(state.presets.prefix, assignedNumericNo);
         state.presets.nextNumber = assignedNumericNo + 1;
 
-        // STRICT PRIVACY: Only log hashes and invoiceNumber to GitHub hash-log.json!
+        // STRICT PRIVACY & COMPACT JSON: Store ONLY the single primaryHash and invoiceNumber!
         await saveHashMapping({
           hash: primaryHash,
-          altHashes: allHashes,
           invoiceNumber: assignedInvoiceNo,
           numericNo: assignedNumericNo
         });
