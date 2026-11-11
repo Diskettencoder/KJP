@@ -1,8 +1,8 @@
 {
   "version": 3,
-  "updatedAt": "2026-11-11T09:21:27.841Z",
+  "updatedAt": "2026-11-11T09:28:30.813Z",
   "prefix": "ReOS-",
-  "nextNumber": 4,
+  "nextNumber": 5,
   "syncKey": "v1:077f131d2036781f17067a6572090434260a2905333a2434754d473a03316f0630251c6c456a670432211657343a3a1b2b4726777f4b3910320e173a19256a45594a4c266a4d14066f122d2a430d657b007a0a100b133507141f72",
   "entries": [
     {
@@ -40,6 +40,17 @@
       ],
       "invoiceNumber": "ReOS-00003",
       "numericNo": 3
+    },
+    {
+      "hash": "13295cad363b4a240e2021d7149ce8902620c9815b90f4a08291b7d65716ce92",
+      "altHashes": [
+        "13295cad363b4a240e2021d7149ce8902620c9815b90f4a08291b7d65716ce92",
+        "e04f23c0751078d7042f307f6635129e1e5f0aa2ece6052a8b038fac2ea398c5",
+        "cd0499d997820a59df5b4a05fcf2df115976482b8a6fdca4f610b3dae13e88d1",
+        "0a013a6d152aee0c77d4f49901c2fd35a60bb0254c0520081451d0101d1e6bf4"
+      ],
+      "invoiceNumber": "ReOS-00004",
+      "numericNo": 4
     }
   ]
 }
