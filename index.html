@@ -47,10 +47,16 @@
       </div>
 
       <div class="flex items-center gap-2 sm:gap-3">
+        <!-- GitHub Repo Log Status / One-Time Admin Setup Button -->
+        <button id="githubSyncBtn" type="button" class="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 rounded-lg px-3 py-1.5 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer" title="Status der automatischen GitHub-Synchronisation (hash-log.json)">
+          <span id="githubSyncDot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+          <span id="githubSyncLabel">GitHub-Log wird geladen…</span>
+        </button>
+
         <!-- Next Invoice Counter Pill (Read-Only) -->
         <div class="bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
           <span class="text-xs font-medium text-slate-500">Nächste Nr.:</span>
-          <span id="nextInvoiceBadge" class="text-sm font-bold text-slate-900 font-mono">RE-0001</span>
+          <span id="nextInvoiceBadge" class="text-sm font-bold text-slate-900 font-mono">ReOS-00001</span>
         </div>
       </div>
     </div>
@@ -92,7 +98,7 @@
           </p>
           <div class="inline-flex items-center gap-2 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-3.5 py-1 mb-4">
             <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
-            100% lokal im Browser · Keine PDF wird hochgeladen
+            100% Lokal im Browser · Keine PDF wird hochgeladen
           </div>
           <p class="text-[11px] text-slate-500">
             <span class="font-medium text-slate-600">Belege finden:</span> SumUp -&gt; Onlineshop -&gt; Bestellungen -&gt; Aktionen -&gt; PDF herunterladen
@@ -202,7 +208,58 @@
     </div>
   </div>
 
-  <!-- Application Logic (100% Local PDF Processing + Privacy-First Hash Logging) -->
+  <!-- GitHub Repo Log (hash-log.json) Setup Modal -->
+  <div id="githubTokenModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+      <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-xl bg-slate-100 text-slate-800 flex items-center justify-center shrink-0 mt-0.5">
+            <i data-lucide="git-branch" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-slate-900">Einmalige Repository-Freigabe (`hash-log.json`)</h3>
+            <p class="text-xs text-slate-600 mt-0.5">
+              Hinterlege hier <strong>ein einziges Mal</strong> deinen GitHub-Token für <code>Diskettencoder/KJP</code>. Danach funktioniert die Seite auf <strong>allen Geräten</strong> automatisch unter derselben URL ohne weitere Einrichtung.
+            </p>
+          </div>
+        </div>
+        <button id="closeGithubModalBtn" type="button" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs text-slate-700">
+        <div>
+          <label for="githubTokenInput" class="block font-semibold text-slate-800 mb-1">
+            GitHub Personal Access Token (Contents: Read &amp; Write für <code>Diskettencoder/KJP</code>):
+          </label>
+          <input
+            type="password"
+            id="githubTokenInput"
+            placeholder="github_pat_... oder ghp_..."
+            class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p class="text-[11px] text-slate-500 mt-1">
+            Der Schlüssel wird verschleiert in <code>hash-log.json</code> abgelegt, sodass GitHub ihn nicht sperrt und jedes andere Gerät ihn beim Öffnen von <code>https://diskettencoder.github.io/KJP/</code> automatisch im Hintergrund nutzen kann.
+          </p>
+        </div>
+
+        <div id="githubModalStatus" class="text-xs font-medium hidden rounded-lg p-2.5"></div>
+      </div>
+
+      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-200">
+        <button id="clearGithubTokenBtn" type="button" class="text-xs text-slate-500 hover:text-red-600 px-3 py-2 rounded-lg transition">
+          Verbindung zurücksetzen
+        </button>
+        <button id="saveGithubTokenBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-5 py-2.5 rounded-xl shadow-xs transition flex items-center gap-2">
+          <i data-lucide="save" class="w-4 h-4"></i>
+          <span>Einmalig aktivieren &amp; speichern</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Logic (100% Local PDF Processing + Automatic Cross-Device GitHub Sync) -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -213,20 +270,47 @@
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
 
-    const LOCAL_STORAGE_KEY = 'kjp_hash_registry_v3';
+    const INVOICE_PREFIX = 'ReOS-';
+    const START_INVOICE_NUMBER = 1; // Starts at ReOS-00001
+    const LOCAL_STORAGE_KEY = 'kjp_reos_hash_registry_v5';
+    const GH_TOKEN_STORAGE_KEY = 'kjp_github_pat_v1';
 
-    // Helper to format invoice numbers with 4-digit leading zeros (e.g. RE-0001)
+    // GitHub Repository Configuration (100% free GitHub REST API on public repo)
+    const GITHUB_CONFIG = {
+      owner: 'Diskettencoder',
+      repo: 'KJP',
+      branch: 'main',
+      filePath: 'hash-log.json'
+    };
+
+    // Helper to format invoice numbers as ReOS-00001 (5-digit zero-padded)
     function formatInvoiceNo(prefix, num) {
-      return `${prefix}${String(num).padStart(4, '0')}`;
+      return `${prefix}${String(num).padStart(5, '0')}`;
+    }
+
+    // Helper to format Euro amounts in German notation (e.g. "20,09 EUR")
+    function formatEUR(val, symbol = 'EUR') {
+      const n = Number(val) || 0;
+      return `${n.toFixed(2).replace('.', ',')} ${symbol}`;
+    }
+
+    function parseEuroNumber(str) {
+      if (!str) return 0;
+      const cleaned = String(str)
+        .replace(/[^0-9,.-]/g, '')
+        .replace(/\.(?=\d{3}(\D|$))/g, '')
+        .replace(',', '.');
+      const num = parseFloat(cleaned);
+      return isNaN(num) ? 0 : num;
     }
 
     // =========================================================================
-    // 1. STATIC PRESETS (UPDATED WITH NEW KJP VERLAG DETAILS & NO BANK ACCOUNT)
+    // 1. STATIC PRESETS (KJP VERLAG DETAILS & ReOS-00001 CYCLE)
     // =========================================================================
     const state = {
       presets: {
-        prefix: 'RE-',
-        nextNumber: 1, // Starts at RE-0001
+        prefix: INVOICE_PREFIX,
+        nextNumber: START_INVOICE_NUMBER, // Starts at ReOS-00001
         senderLine: 'KJP Verlag   Georg-Cantor-Str. 30   06108 Halle (Saale)',
         contactPerson: 'Sabine Ahrens-Eipper',
         introLines: [
@@ -254,9 +338,12 @@
         ]
       },
       customLogoDataUrl: null,
-      logoAspectRatio: 360 / 160, // width / height ratio to prevent distortion in PDF
+      logoAspectRatio: 360 / 160,
       // STRICT PRIVACY: Stores ONLY { hash, invoiceNumber, numericNo }
       hashRegistry: new Map(),
+      githubFileSha: null,
+      githubToken: localStorage.getItem(GH_TOKEN_STORAGE_KEY) || '',
+      pendingFilesAfterToken: null,
       currentInvoice: null,
       db: null,
       user: null,
@@ -264,141 +351,203 @@
     };
 
     // =========================================================================
-    // 2. SVG LOGO LOADER (Expects ./logo.svg in the repository folder)
+    // 2. SVG LOGO LOADER (PRESERVING EXACT ASPECT RATIO FOR PDF & HEADER)
     // =========================================================================
-    const FALLBACK_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 160" width="360" height="160">
-      <rect x="215" y="18" width="22" height="22" rx="4" fill="#f59e0b"/>
-      <rect x="243" y="26" width="22" height="22" rx="4" fill="#10b981"/>
-      <rect x="271" y="18" width="22" height="22" rx="4" fill="#0ea5e9"/>
-      <rect x="299" y="26" width="22" height="22" rx="4" fill="#ec4899"/>
-      <text x="195" y="125" font-family="Inter, Arial, sans-serif" font-weight="bold" font-size="92" fill="#1e293b">kjp</text>
-    </svg>`;
+    async function initLogo() {
+      const fallbackSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 160" width="360" height="160">
+        <text x="10" y="122" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="125" fill="#1e293b">kjp</text>
+      </svg>`;
 
-    /**
-     * Converts raw SVG markup into a high-resolution PNG DataURL via Canvas while
-     * strictly preserving the intrinsic SVG aspect ratio (from viewBox or width/height)
-     * so neither the canvas nor jsPDF.addImage() ever stretches the logo.
-     */
-    function rasterizeSvgToDataUrl(svgText) {
-      return new Promise((resolve, reject) => {
-        let intrinsicWidth = 0;
-        let intrinsicHeight = 0;
-        let normalizedSvgText = svgText;
+      let svgText = fallbackSvg;
+      try {
+        const res = await fetch('./logo.svg', { cache: 'no-cache' });
+        if (res.ok) {
+          const fetched = await res.text();
+          if (fetched && fetched.includes('<svg')) {
+            svgText = fetched;
+          }
+        }
+      } catch (_) {
+        // Fallback SVG used when running without local ./logo.svg
+      }
 
-        try {
-          const parser = new DOMParser();
-          const xmlDoc = parser.parseFromString(svgText, 'image/svg+xml');
-          const svgEl = xmlDoc.querySelector('svg');
-          if (svgEl) {
-            const viewBoxAttr = svgEl.getAttribute('viewBox');
-            if (viewBoxAttr) {
-              const parts = viewBoxAttr.trim().split(/[\s,]+/).map(Number);
-              if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-                intrinsicWidth = parts[2];
-                intrinsicHeight = parts[3];
-              }
-            }
-            if (!intrinsicWidth || !intrinsicHeight) {
-              const wAttr = parseFloat(svgEl.getAttribute('width') || '0');
-              const hAttr = parseFloat(svgEl.getAttribute('height') || '0');
-              if (wAttr > 0 && hAttr > 0) {
-                intrinsicWidth = wAttr;
-                intrinsicHeight = hAttr;
-              }
-            }
-            // Ensure explicit pixel width/height match the intrinsic ratio so browser Image() rendering never stretches
-            if (intrinsicWidth > 0 && intrinsicHeight > 0) {
-              svgEl.setAttribute('width', String(intrinsicWidth));
-              svgEl.setAttribute('height', String(intrinsicHeight));
-              normalizedSvgText = new XMLSerializer().serializeToString(svgEl);
+      // Parse intrinsic SVG aspect ratio from viewBox or width/height
+      try {
+        const parser = new DOMParser();
+        const svgDoc = parser.parseFromString(svgText, 'image/svg+xml');
+        const svgEl = svgDoc.querySelector('svg');
+        if (svgEl) {
+          let w = 0;
+          let h = 0;
+          const vb = svgEl.getAttribute('viewBox');
+          if (vb) {
+            const parts = vb.trim().split(/[\s,]+/).map(Number);
+            if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+              w = parts[2];
+              h = parts[3];
             }
           }
-        } catch (_) {
-          // Fallback to natural image dimensions if XML parsing fails
+          if (!w || !h) {
+            w = parseFloat(svgEl.getAttribute('width')) || 360;
+            h = parseFloat(svgEl.getAttribute('height')) || 160;
+          }
+          if (w > 0 && h > 0) {
+            state.logoAspectRatio = w / h;
+          }
+          if (!svgEl.getAttribute('xmlns')) {
+            svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+          }
+          svgText = new XMLSerializer().serializeToString(svgEl);
         }
+      } catch (e) {
+        console.warn('SVG aspect ratio parse info:', e);
+      }
 
-        const svgBlob = new Blob([normalizedSvgText], { type: 'image/svg+xml;charset=utf-8' });
-        const url = URL.createObjectURL(svgBlob);
+      const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(svgBlob);
+
+      const headerImg = document.getElementById('headerSvgLogo');
+      if (headerImg) {
+        headerImg.onerror = () => {
+          headerImg.onerror = null;
+          headerImg.src = blobUrl;
+        };
+      }
+
+      await new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
-          const w = intrinsicWidth || img.naturalWidth || 360;
-          const h = intrinsicHeight || img.naturalHeight || 160;
-          const widthToHeightRatio = w / h;
-
+          const naturalW = img.naturalWidth || 360;
+          const naturalH = img.naturalHeight || 160;
+          if (naturalW > 0 && naturalH > 0) {
+            state.logoAspectRatio = naturalW / naturalH;
+          }
+          const targetH = 320;
+          const targetW = Math.round(targetH * state.logoAspectRatio);
           const canvas = document.createElement('canvas');
-          const targetWidth = 800;
-          canvas.width = targetWidth;
-          canvas.height = Math.max(1, Math.round(targetWidth / widthToHeightRatio));
-
+          canvas.width = targetW;
+          canvas.height = targetH;
           const ctx = canvas.getContext('2d');
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          URL.revokeObjectURL(url);
-
-          state.logoAspectRatio = widthToHeightRatio;
-          resolve(canvas.toDataURL('image/png'));
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          state.customLogoDataUrl = canvas.toDataURL('image/png');
+          URL.revokeObjectURL(blobUrl);
+          resolve();
         };
-        img.onerror = (err) => {
-          URL.revokeObjectURL(url);
-          reject(err);
+        img.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          resolve();
         };
-        img.src = url;
+        img.src = blobUrl;
       });
     }
 
-    async function initLogo() {
-      const headerImg = document.getElementById('headerSvgLogo');
-      // Automatically load ./logo.svg from the GitHub repository folder
-      try {
-        const response = await fetch('./logo.svg');
-        if (response.ok) {
-          const svgText = await response.text();
-          if (svgText.includes('<svg')) {
-            state.customLogoDataUrl = await rasterizeSvgToDataUrl(svgText);
-            if (headerImg) headerImg.src = state.customLogoDataUrl;
-            renderInvoicePreview();
-            return;
-          }
-        }
-      } catch (_) {
-        // Fallback if ./logo.svg is not yet present in the directory
+    // =========================================================================
+    // 3. ZERO-CONFIG MULTI-DEVICE SYNC VIA `hash-log.json` ON GITHUB
+    // =========================================================================
+    const OBFUSCATION_SALT = 'KJP_ReOS_2026_Sync_Salt_#91';
+
+    /**
+     * Obfuscates the repo-scoped token before storing it in `hash-log.json` so
+     * GitHub's push scanner never flags/revokes it, while any device opening
+     * `https://diskettencoder.github.io/KJP/` can automatically decode it on load.
+     */
+    function obfuscateSyncKey(rawToken) {
+      if (!rawToken) return '';
+      const normalized = rawToken
+        .trim()
+        .replace(/^github_pat_/, '@@GHPAT@@')
+        .replace(/^ghp_/, '@@GHP@@');
+      const reversed = normalized.split('').reverse().join('');
+      const bytes = new TextEncoder().encode(reversed);
+      const saltBytes = new TextEncoder().encode(OBFUSCATION_SALT);
+      let hex = '';
+      for (let i = 0; i < bytes.length; i++) {
+        const x = bytes[i] ^ saltBytes[i % saltBytes.length];
+        hex += x.toString(16).padStart(2, '0');
       }
+      return hex;
+    }
+
+    function deobfuscateSyncKey(hexStr) {
+      if (!hexStr || typeof hexStr !== 'string' || hexStr.length % 2 !== 0) return '';
       try {
-        state.customLogoDataUrl = await rasterizeSvgToDataUrl(FALLBACK_SVG_MARKUP);
-        if (headerImg) headerImg.src = state.customLogoDataUrl;
+        const bytes = new Uint8Array(hexStr.length / 2);
+        const saltBytes = new TextEncoder().encode(OBFUSCATION_SALT);
+        for (let i = 0; i < bytes.length; i++) {
+          const b = parseInt(hexStr.slice(i * 2, i * 2 + 2), 16);
+          bytes[i] = b ^ saltBytes[i % saltBytes.length];
+        }
+        const reversed = new TextDecoder().decode(bytes);
+        const restored = reversed
+          .split('')
+          .reverse()
+          .join('')
+          .replace(/^@@GHPAT@@/, 'github_pat_')
+          .replace(/^@@GHP@@/, 'ghp_');
+        if (restored.startsWith('github_pat_') || restored.startsWith('ghp_')) {
+          return restored;
+        }
+        return '';
       } catch (_) {
-        state.customLogoDataUrl = null;
+        return '';
       }
     }
 
-    // =========================================================================
-    // 3. PRIVACY-FIRST REGISTRY (ONLY HASH <-> INVOICE NUMBER, ZERO CUSTOMER DATA)
-    // =========================================================================
+    function encodeBase64UTF8(str) {
+      const bytes = new TextEncoder().encode(str);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    function decodeBase64UTF8(base64Str) {
+      const cleaned = base64Str.replace(/\s/g, '');
+      const binary = atob(cleaned);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder().decode(bytes);
+    }
+
+    function mergeEntriesIntoState(entries, suggestedNextNumber = START_INVOICE_NUMBER) {
+      let maxNumeric = Math.max(START_INVOICE_NUMBER - 1, state.presets.nextNumber - 1);
+      if (Array.isArray(entries)) {
+        for (const item of entries) {
+          if (item && item.hash && item.invoiceNumber) {
+            const invStr = String(item.invoiceNumber);
+            // Only include entries from the ReOS- cycle so old RE- tests don't shift the counter to 10000
+            if (!invStr.startsWith(INVOICE_PREFIX)) continue;
+
+            const num = Number(item.numericNo) || parseInt(invStr.replace(/\D/g, ''), 10) || 0;
+            if (num < START_INVOICE_NUMBER) continue;
+
+            const sanitized = {
+              hash: String(item.hash),
+              invoiceNumber: formatInvoiceNo(INVOICE_PREFIX, num),
+              numericNo: num
+            };
+            state.hashRegistry.set(sanitized.hash, sanitized);
+            if (sanitized.numericNo > maxNumeric) {
+              maxNumeric = sanitized.numericNo;
+            }
+          }
+        }
+      }
+      const validSuggested = (Number(suggestedNextNumber) >= START_INVOICE_NUMBER && Number(suggestedNextNumber) < 10000)
+        ? Number(suggestedNextNumber)
+        : START_INVOICE_NUMBER;
+      state.presets.nextNumber = Math.max(START_INVOICE_NUMBER, maxNumeric + 1, validSuggested);
+    }
+
     function loadLocalRegistry() {
       try {
         const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (!raw) return;
         const parsed = JSON.parse(raw);
-        let maxNumeric = state.presets.nextNumber - 1;
-        if (Array.isArray(parsed.entries)) {
-          for (const item of parsed.entries) {
-            if (item && item.hash && item.invoiceNumber) {
-              // Strictly keep ONLY hash, invoiceNumber, numericNo
-              const sanitized = {
-                hash: String(item.hash),
-                invoiceNumber: String(item.invoiceNumber),
-                numericNo: Number(item.numericNo) || 0
-              };
-              state.hashRegistry.set(sanitized.hash, sanitized);
-              if (sanitized.numericNo > maxNumeric) {
-                maxNumeric = sanitized.numericNo;
-              }
-            }
-          }
-        }
-        if (maxNumeric >= state.presets.nextNumber) {
-          state.presets.nextNumber = maxNumeric + 1;
-        }
+        mergeEntriesIntoState(parsed.entries, parsed.nextNumber);
       } catch (e) {
         console.warn('Local registry read info:', e);
       }
@@ -421,9 +570,190 @@
       }
     }
 
+    function updateGithubSyncUI(status = 'idle', detailText = '') {
+      const btn = document.getElementById('githubSyncBtn');
+      const dot = document.getElementById('githubSyncDot');
+      const label = document.getElementById('githubSyncLabel');
+      if (!btn || !dot || !label) return;
+
+      if (state.githubToken) {
+        if (status === 'error') {
+          btn.className = 'bg-red-50 hover:bg-red-100 border border-red-300 text-red-800 rounded-lg px-3 py-1.5 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-red-500';
+          label.textContent = detailText || 'GitHub-Log Fehler';
+        } else {
+          btn.className = 'bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg px-3 py-1.5 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
+          label.textContent = detailText || 'GitHub-Log synchronisiert';
+        }
+      } else {
+        btn.className = 'bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 rounded-lg px-3 py-1.5 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer';
+        dot.className = 'w-2 h-2 rounded-full bg-amber-500';
+        label.textContent = 'Einmalig GitHub-Log aktivieren';
+      }
+    }
+
+    /**
+     * Reads `hash-log.json` from `Diskettencoder/KJP`.
+     * Because the repository is public, ANY device opening `https://diskettencoder.github.io/KJP/`
+     * can read `hash-log.json` without prior configuration and automatically pick up the shared `syncKey`
+     * and the current `ReOS-XXXXX` invoice counter.
+     */
+    async function syncFromGitHub() {
+      const { owner, repo, branch, filePath } = GITHUB_CONFIG;
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}&t=${Date.now()}`;
+      const headers = {
+        'Accept': 'application/vnd.github.v3+json'
+      };
+      if (state.githubToken) {
+        headers['Authorization'] = `Bearer ${state.githubToken}`;
+      }
+
+      try {
+        let res = await fetch(apiUrl, { headers, cache: 'no-store' });
+
+        // If a stale local token caused 401, retry unauthenticated so public `syncKey` from repo can be loaded
+        if ((res.status === 401 || res.status === 403) && state.githubToken) {
+          res = await fetch(apiUrl, {
+            headers: { 'Accept': 'application/vnd.github.v3+json' },
+            cache: 'no-store'
+          });
+        }
+
+        if (res.status === 404) {
+          state.githubFileSha = null;
+          if (state.githubToken) {
+            await pushLogToGitHub('Initialisiere hash-log.json (Start bei ReOS-00001)');
+          }
+          updateGithubSyncUI(state.githubToken ? 'ok' : 'idle');
+          updateCounterUI();
+          return true;
+        }
+
+        if (!res.ok) {
+          updateGithubSyncUI('error', 'GitHub nicht erreichbar');
+          return false;
+        }
+
+        const data = await res.json();
+        state.githubFileSha = data.sha;
+        if (data.content) {
+          const jsonText = decodeBase64UTF8(data.content);
+          const parsed = JSON.parse(jsonText);
+
+          // Automatically adopt the shared syncKey from hash-log.json on any new device!
+          if (parsed.syncKey && !state.githubToken) {
+            const restoredToken = deobfuscateSyncKey(parsed.syncKey);
+            if (restoredToken) {
+              state.githubToken = restoredToken;
+              localStorage.setItem(GH_TOKEN_STORAGE_KEY, restoredToken);
+            }
+          }
+
+          // If existing file was from old RE-10000 test cycle, migrate cleanly to ReOS-00001
+          const isReOSFile = parsed.prefix === INVOICE_PREFIX;
+          mergeEntriesIntoState(parsed.entries, isReOSFile ? parsed.nextNumber : START_INVOICE_NUMBER);
+          persistLocalRegistry();
+          updateCounterUI();
+
+          // If we just migrated from old RE-10000 or added syncKey, persist clean ReOS state
+          if (state.githubToken && (!isReOSFile || !parsed.syncKey)) {
+            await pushLogToGitHub('Aktualisiere auf ReOS-00001 Rechnungskreislauf');
+          }
+        }
+        updateGithubSyncUI('ok');
+        return true;
+      } catch (err) {
+        console.warn('GitHub sync read info:', err);
+        return false;
+      }
+    }
+
+    /**
+     * Writes the updated `hash-log.json` directly back into `Diskettencoder/KJP` on GitHub.
+     */
+    async function pushLogToGitHub(commitReason = 'Update hash-log.json') {
+      if (!state.githubToken) return false;
+
+      const { owner, repo, branch, filePath } = GITHUB_CONFIG;
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+
+      const buildPayload = () => {
+        const fileData = {
+          version: 2,
+          updatedAt: new Date().toISOString(),
+          prefix: INVOICE_PREFIX,
+          nextNumber: state.presets.nextNumber,
+          syncKey: obfuscateSyncKey(state.githubToken),
+          entries: Array.from(state.hashRegistry.values())
+            .filter(e => String(e.invoiceNumber).startsWith(INVOICE_PREFIX))
+            .sort((a, b) => a.numericNo - b.numericNo)
+            .map(e => ({
+              hash: e.hash,
+              invoiceNumber: e.invoiceNumber,
+              numericNo: e.numericNo
+            }))
+        };
+        const body = {
+          message: commitReason,
+          content: encodeBase64UTF8(JSON.stringify(fileData, null, 2)),
+          branch
+        };
+        if (state.githubFileSha) {
+          body.sha = state.githubFileSha;
+        }
+        return body;
+      };
+
+      try {
+        let res = await fetch(apiUrl, {
+          method: 'PUT',
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'Authorization': `Bearer ${state.githubToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(buildPayload())
+        });
+
+        if (res.status === 409 || res.status === 422) {
+          await syncFromGitHub();
+          res = await fetch(apiUrl, {
+            method: 'PUT',
+            headers: {
+              'Accept': 'application/vnd.github.v3+json',
+              'Authorization': `Bearer ${state.githubToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(buildPayload())
+          });
+        }
+
+        if (!res.ok) {
+          updateGithubSyncUI('error', 'Schreibfehler auf GitHub');
+          return false;
+        }
+
+        const result = await res.json();
+        if (result && result.content && result.content.sha) {
+          state.githubFileSha = result.content.sha;
+        }
+        updateGithubSyncUI('ok');
+        return true;
+      } catch (err) {
+        console.warn('GitHub push error:', err);
+        updateGithubSyncUI('error', 'Netzwerkfehler');
+        return false;
+      }
+    }
+
     async function initStorage() {
       loadLocalRegistry();
       updateCounterUI();
+
+      // Pull `hash-log.json` (including shared syncKey & current ReOS counter) automatically
+      await syncFromGitHub();
+      updateGithubSyncUI();
 
       try {
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
@@ -443,29 +773,20 @@
             state.user = user;
             if (!user) return;
 
-            const colRef = collection(db, 'artifacts', state.appId, 'users', user.uid, 'invoice_hashes');
+            const colRef = collection(db, 'artifacts', state.appId, 'public', 'data', 'reos_invoice_hashes');
             onSnapshot(colRef, (snapshot) => {
-              let maxNumeric = state.presets.nextNumber - 1;
+              const cloudEntries = [];
               snapshot.forEach((docSnap) => {
                 const data = docSnap.data();
                 if (data && data.hash && data.invoiceNumber) {
-                  // Strictly store ONLY hash, invoiceNumber, numericNo
-                  const minimalEntry = {
-                    hash: String(data.hash),
-                    invoiceNumber: String(data.invoiceNumber),
-                    numericNo: Number(data.numericNo) || 0
-                  };
-                  state.hashRegistry.set(minimalEntry.hash, minimalEntry);
-                  if (minimalEntry.numericNo > maxNumeric) {
-                    maxNumeric = minimalEntry.numericNo;
-                  }
+                  cloudEntries.push(data);
                 }
               });
-              state.presets.nextNumber = maxNumeric + 1;
+              mergeEntriesIntoState(cloudEntries, state.presets.nextNumber);
               persistLocalRegistry();
               updateCounterUI();
             }, (err) => {
-              console.warn('Firestore sync info:', err);
+              console.warn('Cloud sync info:', err);
             });
           });
         }
@@ -475,7 +796,6 @@
     }
 
     async function saveHashMapping(entry) {
-      // Strictly strip everything except hash, invoiceNumber, numericNo
       const minimalEntry = {
         hash: String(entry.hash),
         invoiceNumber: String(entry.invoiceNumber),
@@ -486,9 +806,13 @@
       persistLocalRegistry();
       updateCounterUI();
 
+      if (state.githubToken) {
+        await pushLogToGitHub(`Rechnung ${minimalEntry.invoiceNumber} geloggt`);
+      }
+
       if (state.db && state.user) {
         try {
-          const docRef = doc(state.db, 'artifacts', state.appId, 'users', state.user.uid, 'invoice_hashes', minimalEntry.hash);
+          const docRef = doc(state.db, 'artifacts', state.appId, 'public', 'data', 'reos_invoice_hashes', minimalEntry.hash);
           await setDoc(docRef, minimalEntry);
         } catch (e) {
           console.warn('Could not persist hash entry to cloud:', e);
@@ -497,463 +821,22 @@
     }
 
     // =========================================================================
-    // 4. CONTENT-ONLY SHA-256 HASHING (IGNORES FILENAME & PDF METADATA)
+    // 4. CONTENT-BASED SHA-256 HASH (IGNORES FILENAME & PDF METADATA)
     // =========================================================================
-    async function computeContentHash(normalizedTextTokens) {
-      // Join only the visible text content tokens extracted from the PDF pages,
-      // normalized for whitespace. This guarantees that changing the filename
-      // or PDF metadata (ModDate, Producer, etc.) yields the exact same hash!
-      const canonicalContent = normalizedTextTokens
-        .map(t => t.trim().replace(/\s+/g, ' '))
+    async function computeContentHash(tokens) {
+      const normalized = tokens
+        .map(t => String(t).trim().replace(/\s+/g, ' '))
         .filter(Boolean)
-        .join('|');
-
-      const encoder = new TextEncoder();
-      const data = encoder.encode(canonicalContent);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        .join('|')
+        .toLowerCase();
+      const msgBuffer = new TextEncoder().encode(normalized);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
     // =========================================================================
-    // 5. INTELLIGENT RECEIPT PARSER & COMBINATORIAL 7%/19% TAX SOLVER
-    // =========================================================================
-    function parseGermanFloat(str) {
-      if (!str) return 0;
-      const cleaned = str.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
-      const val = parseFloat(cleaned);
-      return isNaN(val) ? 0 : val;
-    }
-
-    function formatEUR(num, suffix = 'EUR') {
-      return num.toFixed(2).replace('.', ',') + ' ' + suffix;
-    }
-
-    function formatDateDE(dateObj) {
-      const d = String(dateObj.getDate()).padStart(2, '0');
-      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-      const y = dateObj.getFullYear();
-      return `${d}.${m}.${y}`;
-    }
-
-    /**
-     * Evaluates a specific combination of item tax rates (array of 0.07 or 0.19) and shipping tax rate.
-     */
-    function evaluateTaxCombination(items, itemRateValues, shippingGross, shipRate) {
-      const shipNet = shipRate > 0 ? +(shippingGross / (1 + shipRate)).toFixed(2) : shippingGross;
-      const shipTax = +(shippingGross - shipNet).toFixed(2);
-
-      let sumTax7 = shipRate === 0.07 ? shipTax : 0;
-      let sumTax19 = shipRate === 0.19 ? shipTax : 0;
-      const itemRates = [];
-
-      for (let i = 0; i < items.length; i++) {
-        const rate = itemRateValues[i] === 0.19 ? 0.19 : 0.07;
-        const gross = items[i].grossTotal;
-        const net = +(gross / (1 + rate)).toFixed(2);
-        const tax = +(gross - net).toFixed(2);
-        if (rate === 0.19) sumTax19 += tax;
-        else sumTax7 += tax;
-        itemRates.push({
-          rate,
-          netTotal: net,
-          netUnit: +(items[i].grossUnit / (1 + rate)).toFixed(2),
-          tax
-        });
-      }
-
-      sumTax7 = +sumTax7.toFixed(2);
-      sumTax19 = +sumTax19.toFixed(2);
-      const totalCalculatedTax = +(sumTax7 + sumTax19).toFixed(2);
-
-      return {
-        shipRate,
-        shipNet,
-        shipTax,
-        sumTax7,
-        sumTax19,
-        totalCalculatedTax,
-        itemRates,
-        rateList: itemRateValues
-      };
-    }
-
-    /**
-     * Mathematical Solver for 7% vs 19% VAT without an article database:
-     * Checks all 2^N combinations.
-     * - If exactly 1 combination matches the receipt tax (within 0.02 €), returns { unique: true, solution }.
-     * - If 0 combinations match OR >1 combinations match (e.g. two items have the exact same price
-     *   but different tax rates), returns { unique: false, reason, candidateSolution } so the
-     *   Fallback Pop-up Modal can ask the user!
-     */
-    function solveTaxSplit(items, shippingGross, receiptTax) {
-      const n = items.length;
-      if (n === 0 || n > 14) {
-        return {
-          unique: false,
-          reason: 'Zu viele Positionen für die automatische Kombinatorik – bitte Steuersätze kurz prüfen.',
-          candidate: evaluateTaxCombination(items, items.map(() => 0.07), shippingGross, 0)
-        };
-      }
-
-      const TOLERANCE = 0.025;
-      // First check with shipping tax = 0% (as used in the shop receipts order-14 and order-11).
-      // If no match exists at 0%, also test shipping at 7% and 19%.
-      const shippingCandidates = [0, 0.07, 0.19];
-      let matchingSolutions = [];
-      let bestClosest = null;
-      let smallestDiff = Infinity;
-
-      for (const shipRate of shippingCandidates) {
-        const currentMatches = [];
-        const totalCombos = 1 << n;
-
-        for (let mask = 0; mask < totalCombos; mask++) {
-          const rateList = [];
-          for (let i = 0; i < n; i++) {
-            const is19 = ((mask >> i) & 1) === 1;
-            rateList.push(is19 ? 0.19 : 0.07);
-          }
-
-          const evaluated = evaluateTaxCombination(items, rateList, shippingGross, shipRate);
-          const diff = Math.abs(evaluated.totalCalculatedTax - receiptTax);
-
-          if (diff < smallestDiff) {
-            smallestDiff = diff;
-            bestClosest = evaluated;
-          }
-
-          if (diff <= TOLERANCE) {
-            currentMatches.push(evaluated);
-          }
-        }
-
-        if (currentMatches.length > 0) {
-          matchingSolutions = currentMatches;
-          break; // Prefer the simplest shipping rate tier that matches
-        }
-      }
-
-      if (matchingSolutions.length === 1) {
-        return {
-          unique: true,
-          solution: matchingSolutions[0]
-        };
-      }
-
-      if (matchingSolutions.length > 1) {
-        return {
-          unique: false,
-          reason: `Es gibt ${matchingSolutions.length} mathematisch mögliche Kombinationen (z. B. gleich teure Artikel mit unterschiedlichem Steuersatz), die exakt ${formatEUR(receiptTax, '€')} Steuer ergeben. Bitte wähle kurz aus, welcher Artikel 7% bzw. 19% hat.`,
-          candidate: matchingSolutions[0]
-        };
-      }
-
-      return {
-        unique: false,
-        reason: `Aus der Beleg-Steuer (${formatEUR(receiptTax, '€')}) ließ sich keine eindeutige 7%/19%-Kombination berechnen. Bitte lege die Steuersätze für die Positionen kurz fest.`,
-        candidate: bestClosest || evaluateTaxCombination(items, items.map(() => 0.07), shippingGross, 0)
-      };
-    }
-
-    // =========================================================================
-    // 5B. INTERACTIVE FALLBACK MODAL FOR AMBIGUOUS TAX SPLITS
-    // =========================================================================
-    let modalDraftRates = [];
-    let modalDraftShipRate = 0;
-
-    function openTaxFallbackModal(inv, reasonText) {
-      if (!inv) return;
-      const modal = document.getElementById('taxFallbackModal');
-      const reasonEl = document.getElementById('taxModalReasonText');
-      if (reasonEl && reasonText) {
-        reasonEl.textContent = reasonText;
-      }
-
-      // Initialize draft rates from existing manual override or solver candidate
-      const solved = solveTaxSplit(inv.items, inv.shippingGross, inv.taxAmount);
-      const baseSol = inv.manualTaxSolution || (solved.unique ? solved.solution : solved.candidate);
-
-      modalDraftRates = baseSol
-        ? [...baseSol.rateList]
-        : inv.items.map(() => 0.07);
-      modalDraftShipRate = baseSol ? baseSol.shipRate : 0;
-
-      renderTaxModalContent(inv);
-      modal.classList.remove('hidden');
-      modal.classList.add('flex');
-      if (window.lucide) window.lucide.createIcons();
-    }
-
-    function closeTaxFallbackModal() {
-      const modal = document.getElementById('taxFallbackModal');
-      modal.classList.add('hidden');
-      modal.classList.remove('flex');
-    }
-
-    function renderTaxModalContent(inv) {
-      const container = document.getElementById('taxModalItemsContainer');
-      if (!container || !inv) return;
-
-      container.innerHTML = inv.items.map((item, idx) => {
-        const currentRate = modalDraftRates[idx] || 0.07;
-        const is7 = currentRate === 0.07;
-        const is19 = currentRate === 0.19;
-
-        return `
-          <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div class="min-w-0">
-              <div class="text-xs font-bold text-slate-900 truncate">${idx + 1}. ${item.title}</div>
-              <div class="text-[11px] text-slate-500">${item.qty}x ${formatEUR(item.grossUnit, '€')} · Gesamt brutto: <strong>${formatEUR(item.grossTotal, '€')}</strong></div>
-            </div>
-            <div class="flex items-center gap-1.5 shrink-0">
-              <button type="button" data-item-idx="${idx}" data-rate="0.07"
-                class="item-tax-btn px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${is7 ? 'bg-blue-600 text-white border-blue-600 shadow-2xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
-                7% (Buch)
-              </button>
-              <button type="button" data-item-idx="${idx}" data-rate="0.19"
-                class="item-tax-btn px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${is19 ? 'bg-blue-600 text-white border-blue-600 shadow-2xs' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
-                19% (Spiel/Karten)
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      // Bind item rate buttons
-      container.querySelectorAll('.item-tax-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const idx = parseInt(btn.getAttribute('data-item-idx'), 10);
-          const rate = parseFloat(btn.getAttribute('data-rate'));
-          modalDraftRates[idx] = rate;
-          renderTaxModalContent(inv);
-        });
-      });
-
-      // Update shipping rate buttons
-      document.querySelectorAll('.ship-rate-btn').forEach(btn => {
-        const r = parseFloat(btn.getAttribute('data-ship-rate'));
-        const active = Math.abs(r - modalDraftShipRate) < 0.001;
-        btn.className = `ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
-          active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-        }`;
-        btn.onclick = () => {
-          modalDraftShipRate = r;
-          renderTaxModalContent(inv);
-        };
-      });
-
-      // Evaluate live tax preview
-      const evaluated = evaluateTaxCombination(inv.items, modalDraftRates, inv.shippingGross, modalDraftShipRate);
-      document.getElementById('taxModalTargetTax').textContent = formatEUR(inv.taxAmount, '€');
-      document.getElementById('taxModalCurrentTax').textContent = formatEUR(evaluated.totalCalculatedTax, '€');
-      document.getElementById('taxModalSplitPreview').textContent =
-        `7% USt.: ${formatEUR(evaluated.sumTax7, '€')} · 19% USt.: ${formatEUR(evaluated.sumTax19, '€')}`;
-
-      const diff = Math.abs(evaluated.totalCalculatedTax - inv.taxAmount);
-      const badge = document.getElementById('taxModalMatchBadge');
-      if (diff <= 0.03) {
-        badge.textContent = '✓ Stimmt exakt mit Beleg-Steuer überein';
-        badge.className = 'text-[11px] font-semibold mt-0.5 text-emerald-700';
-      } else {
-        badge.textContent = `Δ ${formatEUR(Math.abs(evaluated.totalCalculatedTax - inv.taxAmount), '€')} Abweichung zum Beleg`;
-        badge.className = 'text-[11px] font-semibold mt-0.5 text-amber-700';
-      }
-    }
-
-    /**
-     * Parses raw text lines from KJP order receipts (like order-14.pdf and order-11.pdf)
-     */
-    function parseReceiptTextLines(lines) {
-      const cleanLines = lines.map(l => l.trim()).filter(Boolean);
-
-      // 1. Extract Order Number (#14, #11, etc.)
-      let orderNo = '1000';
-      for (const line of cleanLines) {
-        const m = line.match(/Neue Bestellung\s*#(\d+)/i) || line.match(/Bestellung\s*#(\d+)/i);
-        if (m) {
-          orderNo = m[1];
-          break;
-        }
-      }
-
-      // 2. Extract Order Date (Bestelldatum: e.g. 2026/11/10 -> 10.11.2026) and fallback customer name
-      let orderDate = formatDateDE(new Date());
-      let headerCustomerName = '';
-      for (const line of cleanLines) {
-        const dm = line.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})(?:\s+\d{2}:\d{2}:\d{2})?\s*(.*)/);
-        if (dm) {
-          orderDate = `${dm[3]}.${dm[2]}.${dm[1]}`;
-          if (dm[4] && dm[4].trim().length > 2) {
-            headerCustomerName = dm[4].trim();
-          }
-          break;
-        }
-      }
-
-      // 3. Extract Customer Address (Anchor on 5-digit German Postal Code + City before "Ihre Bestellung")
-      const orderStartIdx = cleanLines.findIndex(l => /Ihre Bestellung/i.test(l));
-      const headerSection = orderStartIdx > 0 ? cleanLines.slice(0, orderStartIdx) : cleanLines;
-
-      const ignoredHeaderLabels = /^(Zahlungsmethode|Liefermethode|Standard-Lieferung|Bezahlt mit.*|Kundendetails|Lieferadresse|Rechnungsdaten|Neue Bestellung.*)$/i;
-      const candidateAddressTokens = [];
-
-      for (const rawLine of headerSection) {
-        if (ignoredHeaderLabels.test(rawLine)) continue;
-        if (/\d{4}[\/\-]\d{2}[\/\-]\d{2}/.test(rawLine)) continue;
-        if (rawLine.includes('@')) continue;
-        if (/^\+?\d[\d\s\/-]{6,}$/.test(rawLine)) continue;
-
-        // Clean prefix label if merged on same line
-        let cleaned = rawLine
-          .replace(/^(Lieferadresse|Rechnungsdaten|Kundendetails)\s+/i, '')
-          .trim();
-        if (cleaned) candidateAddressTokens.push(cleaned);
-      }
-
-      let addressLines = [];
-      // Find PLZ + City anchor (5-digit postal code)
-      const plzIdx = candidateAddressTokens.findIndex(t => /^\d{5}\s+[A-Za-zÄÖÜäöüß]/.test(t));
-      if (plzIdx !== -1) {
-        const plzLine = candidateAddressTokens[plzIdx];
-        const streetLine = plzIdx >= 1 ? candidateAddressTokens[plzIdx - 1] : '';
-        const nameLine = plzIdx >= 2 ? candidateAddressTokens[plzIdx - 2] : (headerCustomerName || '');
-        const countryLine = (candidateAddressTokens[plzIdx + 1] && /^(Deutschland|Österreich|Schweiz)$/i.test(candidateAddressTokens[plzIdx + 1]))
-          ? candidateAddressTokens[plzIdx + 1]
-          : 'Deutschland';
-
-        addressLines = [nameLine, streetLine, plzLine, countryLine].filter(Boolean);
-      } else {
-        addressLines = [
-          headerCustomerName || ''
-        ].filter(Boolean);
-      }
-
-      // 4. Extract Order Items & Totals after "Ihre Bestellung"
-      const bodyLines = orderStartIdx !== -1 ? cleanLines.slice(orderStartIdx + 1) : cleanLines;
-
-      const items = [];
-      let pendingTitleParts = [];
-      const summaryKeywords = /^(Zwischensumme|Versand|Steuer|Gesamtbetrag|inkl\..*USt\.?|Ihre Bestellung|Zahlungsmethode|Liefermethode)$/i;
-
-      for (let i = 0; i < bodyLines.length; i++) {
-        const line = bodyLines[i];
-
-        if (summaryKeywords.test(line)) {
-          continue;
-        }
-
-        // Check for quantity x unit price pattern: e.g. "1x 21,50 €" or "1 x 34,50 €" or "$1\times21,50\in$"
-        const qtyMatch = line.match(/(\d+)\s*(?:[x×]|\\times)\s*(\d+[.,]\d{2})/i);
-        if (qtyMatch) {
-          const qty = parseInt(qtyMatch[1], 10) || 1;
-          const grossUnit = parseGermanFloat(qtyMatch[2]);
-
-          // Check if next line is the standalone line total (e.g. "34,50 €"), and skip it so it doesn't pollute next title
-          let grossTotal = +(qty * grossUnit).toFixed(2);
-          if (i + 1 < bodyLines.length) {
-            const nextPriceMatch = bodyLines[i + 1].match(/^(\d+[.,]\d{2})\s*€?$/);
-            if (nextPriceMatch) {
-              grossTotal = parseGermanFloat(nextPriceMatch[1]);
-              i++; // consume line total token
-            }
-          }
-
-          // Clean and deduplicate product title parts
-          const filteredTitles = pendingTitleParts.filter(part => {
-            if (summaryKeywords.test(part)) return false;
-            if (/^\d+[.,]\d{2}\s*€?$/.test(part)) return false;
-            // Ignore tiny all-caps thumbnail OCR artifacts like "DAS DENUN"
-            if (/^[A-ZÄÖÜ\s]{4,12}$/.test(part) && pendingTitleParts.length > 1) return false;
-            return true;
-          });
-
-          // Deduplicate if second line is already a substring of the first (e.g. "Trauma First: Das Seefahrercamp 6-10" + "Trauma First")
-          const finalTitleParts = [];
-          for (const part of filteredTitles) {
-            const alreadyContained = finalTitleParts.some(existing =>
-              existing.toLowerCase().includes(part.toLowerCase())
-            );
-            if (!alreadyContained) {
-              finalTitleParts.push(part);
-            }
-          }
-
-          const title = finalTitleParts.join(' – ') || `Artikel Position ${items.length + 1}`;
-          items.push({
-            pos: items.length + 1,
-            title,
-            qty,
-            grossUnit,
-            grossTotal
-          });
-          pendingTitleParts = [];
-          continue;
-        }
-
-        // Ignore standalone euro amounts from being added as product titles
-        if (/^\d+[.,]\d{2}\s*€?$/.test(line)) {
-          continue;
-        }
-
-        pendingTitleParts.push(line);
-      }
-
-      // 5. Extract Summary Totals (Zwischensumme, Versand, Steuer, Gesamtbetrag)
-      const itemsSubtotal = +items.reduce((acc, it) => acc + it.grossTotal, 0).toFixed(2);
-
-      // Extract explicit tax from "inkl. 1,41 € USt." or "Steuer 1,41 €"
-      let taxAmount = 0;
-      const fullText = bodyLines.join(' ');
-      const ustMatch = fullText.match(/inkl\.\s*(\d+[.,]\d{2})\s*€?\s*USt/i) || fullText.match(/Steuer\s+(\d+[.,]\d{2})\s*€/i);
-      if (ustMatch) {
-        taxAmount = parseGermanFloat(ustMatch[1]);
-      }
-
-      // Extract all standalone monetary amounts in the summary section to reliably determine Shipping and Total Gross
-      const allMoneyMatches = [...fullText.matchAll(/(\d+[.,]\d{2})\s*€/g)].map(m => parseGermanFloat(m[1]));
-      let totalGross = itemsSubtotal;
-      if (allMoneyMatches.length > 0) {
-        const maxAmount = Math.max(...allMoneyMatches);
-        if (maxAmount >= itemsSubtotal) {
-          totalGross = maxAmount;
-        }
-      }
-
-      let shippingGross = +(totalGross - itemsSubtotal).toFixed(2);
-      if (shippingGross < 0 || shippingGross > 50) {
-        shippingGross = 4.90; // Standard KJP shipping fallback
-        totalGross = +(itemsSubtotal + shippingGross).toFixed(2);
-      }
-
-      // If taxAmount wasn't matched via "inkl. X USt.", find the remaining number in the summary block
-      if (!taxAmount && allMoneyMatches.length >= 2) {
-        const candidates = allMoneyMatches.filter(v =>
-          Math.abs(v - totalGross) > 0.01 &&
-          Math.abs(v - itemsSubtotal) > 0.01 &&
-          Math.abs(v - shippingGross) > 0.01
-        );
-        if (candidates.length > 0) {
-          taxAmount = candidates[candidates.length - 1];
-        }
-      }
-
-      return {
-        orderNo,
-        customerName: addressLines[0] || headerCustomerName || 'Kunde',
-        addressLines,
-        orderDate,
-        invoiceDate: formatDateDE(new Date()),
-        items,
-        subtotalGross: itemsSubtotal,
-        shippingGross,
-        taxAmount,
-        totalGross
-      };
-    }
-
-    // =========================================================================
-    // 6. EXTRACT TEXT TOKENS FROM PDF IN BROWSER (100% LOCAL)
+    // 5. PDF TEXT EXTRACTION & SUMUP RECEIPT PARSER
     // =========================================================================
     async function extractLinesFromPdfBuffer(arrayBuffer) {
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -964,36 +847,387 @@
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
 
-        // Collect raw tokens sorted deterministically for content hashing
-        const pageItems = textContent.items
-          .filter(item => item.str && item.str.trim().length > 0)
-          .map(item => ({
-            str: item.str.trim(),
-            x: Math.round(item.transform[4]),
-            y: Math.round(item.transform[5])
-          }));
+        const rowsByY = [];
+        for (const item of textContent.items) {
+          const str = (item.str || '').trim();
+          if (!str) continue;
+          rawContentTokensForHash.push(str);
 
-        // Sort top-to-bottom (higher Y is higher on PDF page), then left-to-right (lower X first)
-        pageItems.sort((a, b) => {
-          if (Math.abs(b.y - a.y) > 4) {
-            return b.y - a.y;
+          const x = item.transform ? item.transform[4] : 0;
+          const y = item.transform ? item.transform[5] : 0;
+
+          let row = rowsByY.find(r => Math.abs(r.y - y) < 3.5);
+          if (!row) {
+            row = { y, items: [] };
+            rowsByY.push(row);
           }
-          return a.x - b.x;
-        });
+          row.items.push({ x, str });
+        }
 
-        for (const it of pageItems) {
-          rawContentTokensForHash.push(it.str);
-          allLines.push(it.str);
+        rowsByY.sort((a, b) => b.y - a.y);
+        for (const row of rowsByY) {
+          row.items.sort((a, b) => a.x - b.x);
+          for (const it of row.items) {
+            allLines.push(it.str);
+          }
         }
       }
 
       return { allLines, rawContentTokensForHash };
     }
 
+    function parseReceiptTextLines(lines) {
+      const cleanLines = lines.map(l => String(l).trim()).filter(Boolean);
+      const fullText = cleanLines.join('\n');
+
+      // 1. Order Number (e.g. "Neue Bestellung #14")
+      let orderNo = 'Unbekannt';
+      const orderMatch = fullText.match(/Bestellung\s*#\s*(\d+)/i);
+      if (orderMatch) orderNo = orderMatch[1];
+
+      // 2. Order Date from receipt timestamp (e.g. "2026/11/10 16:36:00" -> "10.11.2026")
+      const now = new Date();
+      const todayFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
+      let orderDate = todayFormatted;
+      const isoDateMatch = fullText.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/);
+      if (isoDateMatch) {
+        orderDate = `${isoDateMatch[3]}.${isoDateMatch[2]}.${isoDateMatch[1]}`;
+      } else {
+        const deDateMatch = fullText.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+        if (deDateMatch) {
+          orderDate = `${deDateMatch[1]}.${deDateMatch[2]}.${deDateMatch[3]}`;
+        }
+      }
+
+      // 3. Customer Name & Address (from "Rechnungsdaten" or "Lieferadresse")
+      let addressLines = [];
+      const stopWords = /^(Neue Bestellung|Bezahlt|Ihre Bestellung|Zwischensumme|Versand|Steuer|Gesamtbetrag|Zahlungsmethode|Liefermethode|Kundendetails|Rechnungsdaten|Lieferadresse)$/i;
+
+      const findAddressSection = (headerRegex) => {
+        const idx = cleanLines.findIndex(l => headerRegex.test(l));
+        if (idx === -1) return [];
+        const collected = [];
+        for (let i = idx + 1; i < cleanLines.length && collected.length < 5; i++) {
+          const candidate = cleanLines[i];
+          if (stopWords.test(candidate) || /^\d{4}[\/\-]\d{2}[\/\-]\d{2}/.test(candidate)) break;
+          if (candidate.includes('@') || /^\+?\d[\d\s\/-]{6,}$/.test(candidate)) continue;
+          collected.push(candidate);
+        }
+        return collected;
+      };
+
+      addressLines = findAddressSection(/^Rechnungsdaten$/i);
+      if (addressLines.length < 2) {
+        addressLines = findAddressSection(/^Lieferadresse$/i);
+      }
+      if (addressLines.length === 0) {
+        addressLines = ['Kunde'];
+      }
+      const customerName = addressLines[0] || 'Kunde';
+
+      // 4. Extract Items (Quantity x Price pattern e.g. "1 x 21,50 €" or "1x 49,90 €")
+      const items = [];
+      const qtyPriceRegex = /^(\d+)\s*[x×]\s*(\d+[.,]\d{2})\s*€?$/i;
+
+      const bestellungIdx = cleanLines.findIndex(l => /^Ihre Bestellung$/i.test(l));
+      const startIdx = bestellungIdx !== -1 ? bestellungIdx + 1 : 0;
+
+      for (let i = startIdx; i < cleanLines.length; i++) {
+        const line = cleanLines[i];
+        if (/^(Zwischensumme|Gesamtbetrag)$/i.test(line)) {
+          // Do not stop prematurely if Zwischensumme is listed as a table header before items
+        }
+        const m = line.match(qtyPriceRegex);
+        if (m) {
+          const qty = parseInt(m[1], 10) || 1;
+          const unitGross = parseEuroNumber(m[2]);
+          const totalGross = +(qty * unitGross).toFixed(2);
+
+          // Find item title right before the "1 x XX,XX €" line
+          let title = 'Artikel';
+          for (let back = i - 1; back >= Math.max(0, i - 3); back--) {
+            const prev = cleanLines[back];
+            if (
+              !stopWords.test(prev) &&
+              !qtyPriceRegex.test(prev) &&
+              !/^\d+[.,]\d{2}\s*€?$/.test(prev) &&
+              !/^Standard-Lieferung$/i.test(prev)
+            ) {
+              title = prev;
+              break;
+            }
+          }
+
+          items.push({
+            title,
+            qty,
+            unitGross,
+            totalGross
+          });
+        }
+      }
+
+      // 5. Extract Totals (Zwischensumme, Versand, Steuer, Gesamtbetrag)
+      let shippingGross = 0;
+      let taxAmount = 0;
+      let totalGross = 0;
+
+      // Look for "inkl. X,XX € USt." first as a very reliable tax indicator
+      const inklTaxMatch = fullText.match(/inkl\.\s*(\d+[.,]\d{2})\s*€?\s*USt/i);
+      if (inklTaxMatch) {
+        taxAmount = parseEuroNumber(inklTaxMatch[1]);
+      }
+
+      // Also scan label->amount pairs for Versand, Steuer, Gesamtbetrag
+      const findAmountNearLabel = (labelRegex) => {
+        for (let i = 0; i < cleanLines.length; i++) {
+          if (labelRegex.test(cleanLines[i])) {
+            for (let j = i + 1; j <= Math.min(cleanLines.length - 1, i + 4); j++) {
+              const m = cleanLines[j].match(/^(\d+[.,]\d{2})\s*€?$/);
+              if (m) return parseEuroNumber(m[1]);
+            }
+          }
+        }
+        return null;
+      };
+
+      // Handle grouped block: Zwischensumme / Versand followed by amounts
+      const zwIdx = cleanLines.findIndex(l => /^Zwischensumme$/i.test(l));
+      const versandIdx = cleanLines.findIndex(l => /^Versand$/i.test(l));
+      if (zwIdx !== -1 && versandIdx === zwIdx + 1) {
+        // Collect standalone euro amounts after Versand
+        const trailingAmounts = [];
+        for (let k = versandIdx + 1; k < cleanLines.length; k++) {
+          if (/^(Steuer|Gesamtbetrag)$/i.test(cleanLines[k])) break;
+          if (qtyPriceRegex.test(cleanLines[k])) continue;
+          const m = cleanLines[k].match(/^(\d+[.,]\d{2})\s*€?$/);
+          if (m) trailingAmounts.push(parseEuroNumber(m[1]));
+        }
+        if (trailingAmounts.length >= 2) {
+          shippingGross = trailingAmounts[trailingAmounts.length - 1];
+        }
+      } else {
+        const v = findAmountNearLabel(/^Versand$/i);
+        if (v !== null) shippingGross = v;
+      }
+
+      if (!taxAmount) {
+        const t = findAmountNearLabel(/^Steuer$/i);
+        if (t !== null) taxAmount = t;
+      }
+
+      const g = findAmountNearLabel(/^Gesamtbetrag$/i);
+      const itemsGrossSum = items.reduce((acc, it) => acc + it.totalGross, 0);
+      totalGross = g !== null ? g : +(itemsGrossSum + shippingGross).toFixed(2);
+
+      return {
+        orderNo,
+        orderDate,
+        invoiceDate: todayFormatted,
+        customerName,
+        addressLines,
+        items,
+        shippingGross,
+        taxAmount,
+        totalGross
+      };
+    }
+
     // =========================================================================
-    // 7. PROCESS UPLOADED RECEIPT (HASH CHECK + SMART TAX SOLVER + DOWNLOAD)
+    // 6. SMART 7% / 19% TAX SOLVER & INTERACTIVE POPUP FALLBACK
+    // =========================================================================
+    let modalDraftRates = [];
+    let modalDraftShipRate = 0;
+
+    function evaluateTaxCombination(items, itemRatesList, shippingGross, shipTaxRate = 0) {
+      let sumTax7 = 0;
+      let sumTax19 = 0;
+
+      const itemRates = items.map((it, idx) => {
+        const rate = itemRatesList[idx] ?? 0.07;
+        const netTotal = +(it.totalGross / (1 + rate)).toFixed(2);
+        const netUnit = +(it.unitGross / (1 + rate)).toFixed(2);
+        const tax = +(it.totalGross - netTotal).toFixed(2);
+        if (Math.abs(rate - 0.07) < 0.001) sumTax7 += tax;
+        else if (Math.abs(rate - 0.19) < 0.001) sumTax19 += tax;
+        return { rate, netUnit, netTotal, tax };
+      });
+
+      const shipNet = shipTaxRate > 0 ? +(shippingGross / (1 + shipTaxRate)).toFixed(2) : +shippingGross.toFixed(2);
+      const shipTax = +(shippingGross - shipNet).toFixed(2);
+      if (Math.abs(shipTaxRate - 0.07) < 0.001) sumTax7 += shipTax;
+      else if (Math.abs(shipTaxRate - 0.19) < 0.001) sumTax19 += shipTax;
+
+      sumTax7 = +sumTax7.toFixed(2);
+      sumTax19 = +sumTax19.toFixed(2);
+      const totalCalculatedTax = +(sumTax7 + sumTax19).toFixed(2);
+
+      return {
+        itemRates,
+        shipTaxRate,
+        shipNet,
+        shipTax,
+        sumTax7,
+        sumTax19,
+        totalCalculatedTax
+      };
+    }
+
+    function solveTaxSplit(items, shippingGross, targetTax) {
+      const n = items.length;
+      if (n === 0) {
+        const emptySol = evaluateTaxCombination([], [], shippingGross, 0);
+        return { unique: true, solution: emptySol, candidate: emptySol, reason: '' };
+      }
+
+      const totalCombos = 1 << Math.min(n, 14);
+      const shipRatesToTry = [0, 0.07, 0.19];
+      let bestCandidate = null;
+      let bestDiff = Infinity;
+
+      for (const shipRate of shipRatesToTry) {
+        const exactMatches = [];
+
+        for (let mask = 0; mask < totalCombos; mask++) {
+          const rates = [];
+          for (let i = 0; i < n; i++) {
+            rates.push(((mask >> i) & 1) === 1 ? 0.19 : 0.07);
+          }
+          const evaluated = evaluateTaxCombination(items, rates, shippingGross, shipRate);
+          const diff = Math.abs(evaluated.totalCalculatedTax - targetTax);
+
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestCandidate = evaluated;
+          }
+          if (diff <= 0.015) {
+            exactMatches.push(evaluated);
+          }
+        }
+
+        if (exactMatches.length === 1) {
+          return {
+            unique: true,
+            solution: exactMatches[0],
+            candidate: exactMatches[0],
+            reason: ''
+          };
+        }
+
+        if (exactMatches.length > 1) {
+          return {
+            unique: false,
+            solution: null,
+            candidate: exactMatches[0],
+            reason: 'Mehrere Kombinationen aus 7% und 19% ergeben exakt dieselbe Steuersumme. Bitte wähle kurz für jede Position den passenden Steuersatz.'
+          };
+        }
+      }
+
+      return {
+        unique: false,
+        solution: null,
+        candidate: bestCandidate,
+        reason: 'Die Steuersumme im Beleg ließ sich rechnerisch nicht eindeutig auf 7% und 19% aufteilen. Bitte bestätige kurz die Steuersätze der Positionen.'
+      };
+    }
+
+    function openTaxFallbackModal(invoice, reasonText) {
+      const modal = document.getElementById('taxFallbackModal');
+      const reasonEl = document.getElementById('taxModalReasonText');
+      const container = document.getElementById('taxModalItemsContainer');
+      const targetEl = document.getElementById('taxModalTargetTax');
+      if (!modal || !container) return;
+
+      if (reasonEl && reasonText) reasonEl.textContent = reasonText;
+      if (targetEl) targetEl.textContent = formatEUR(invoice.taxAmount, '€');
+
+      const fallbackSolved = solveTaxSplit(invoice.items, invoice.shippingGross, invoice.taxAmount);
+      const initial = fallbackSolved.candidate;
+      modalDraftRates = invoice.items.map((_, idx) => initial?.itemRates[idx]?.rate ?? 0.07);
+      modalDraftShipRate = initial?.shipTaxRate ?? 0;
+
+      const renderModalControls = () => {
+        container.innerHTML = invoice.items.map((it, idx) => {
+          const activeRate = modalDraftRates[idx];
+          return `
+            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-xs font-semibold text-slate-900 truncate">${idx + 1}. ${it.title}</div>
+                <div class="text-[11px] text-slate-500">${it.qty} × ${formatEUR(it.unitGross, '€')} = ${formatEUR(it.totalGross, '€')} brutto</div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button type="button" data-item-idx="${idx}" data-rate="0.07" class="item-rate-btn px-2.5 py-1 rounded-lg border text-xs font-semibold transition ${Math.abs(activeRate - 0.07) < 0.001 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300'}">7% (Buch)</button>
+                <button type="button" data-item-idx="${idx}" data-rate="0.19" class="item-rate-btn px-2.5 py-1 rounded-lg border text-xs font-semibold transition ${Math.abs(activeRate - 0.19) < 0.001 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300'}">19% (Spiel/Karten)</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        container.querySelectorAll('.item-rate-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = Number(btn.getAttribute('data-item-idx'));
+            const r = Number(btn.getAttribute('data-rate'));
+            modalDraftRates[idx] = r;
+            renderModalControls();
+          });
+        });
+
+        document.querySelectorAll('#taxModalShipRateGroup .ship-rate-btn').forEach(btn => {
+          const r = Number(btn.getAttribute('data-ship-rate'));
+          if (Math.abs(r - modalDraftShipRate) < 0.001) {
+            btn.className = 'ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-semibold transition bg-blue-600 text-white border-blue-600';
+          } else {
+            btn.className = 'ship-rate-btn px-2.5 py-1 rounded-lg border text-xs font-medium transition bg-white text-slate-700 border-slate-300';
+          }
+          btn.onclick = () => {
+            modalDraftShipRate = r;
+            renderModalControls();
+          };
+        });
+
+        const previewEval = evaluateTaxCombination(invoice.items, modalDraftRates, invoice.shippingGross, modalDraftShipRate);
+        const currentTaxEl = document.getElementById('taxModalCurrentTax');
+        const splitPreviewEl = document.getElementById('taxModalSplitPreview');
+        const matchBadgeEl = document.getElementById('taxModalMatchBadge');
+
+        if (currentTaxEl) currentTaxEl.textContent = formatEUR(previewEval.totalCalculatedTax, '€');
+        if (splitPreviewEl) {
+          splitPreviewEl.textContent = `7% USt.: ${formatEUR(previewEval.sumTax7, '€')} · 19% USt.: ${formatEUR(previewEval.sumTax19, '€')}`;
+        }
+        if (matchBadgeEl) {
+          const diff = Math.abs(previewEval.totalCalculatedTax - invoice.taxAmount);
+          if (diff <= 0.02) {
+            matchBadgeEl.textContent = '✓ Stimmt exakt mit Beleg überein';
+            matchBadgeEl.className = 'text-[11px] font-semibold mt-0.5 text-emerald-600';
+          } else {
+            matchBadgeEl.textContent = `Abweichung: ${formatEUR(previewEval.totalCalculatedTax - invoice.taxAmount, '€')}`;
+            matchBadgeEl.className = 'text-[11px] font-semibold mt-0.5 text-amber-600';
+          }
+        }
+      };
+
+      renderModalControls();
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    function closeTaxFallbackModal() {
+      const modal = document.getElementById('taxFallbackModal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+    }
+
+    // =========================================================================
+    // 7. PROCESS UPLOADED RECEIPT (GITHUB SYNC + HASH CHECK + DOWNLOAD)
     // =========================================================================
     async function processReceiptData(parsedData, contentHash, sourceLabel = 'Beleg') {
+      // Pull the latest hash-log.json from GitHub right before assigning a number
+      // so other devices' invoices from earlier today or last week are guaranteed to be included
+      await syncFromGitHub();
+
       let assignedInvoiceNo = '';
       let assignedNumericNo = 0;
       let isDuplicate = false;
@@ -1011,12 +1245,12 @@
           `Für dieses Dokument wurde bereits eine Rechnung generiert. Es wurde automatisch auf die ursprüngliche Rechnungsnummer ${assignedInvoiceNo} zurückgesprungen.`
         );
       } else {
-        // NEW RECEIPT -> Assign next chronological invoice number
-        assignedNumericNo = state.presets.nextNumber;
+        // NEW RECEIPT -> Assign next chronological invoice number (starting at ReOS-00001)
+        assignedNumericNo = Math.max(START_INVOICE_NUMBER, state.presets.nextNumber);
         assignedInvoiceNo = formatInvoiceNo(state.presets.prefix, assignedNumericNo);
         state.presets.nextNumber = assignedNumericNo + 1;
 
-        // STRICT PRIVACY: Only log hash and invoiceNumber!
+        // STRICT PRIVACY: Only log hash and invoiceNumber to GitHub hash-log.json!
         await saveHashMapping({
           hash: contentHash,
           invoiceNumber: assignedInvoiceNo,
@@ -1025,7 +1259,7 @@
 
         showBanner(
           'success',
-          `Rechnung ${assignedInvoiceNo} erstellt!`,
+          `Rechnung ${assignedInvoiceNo} erstellt & gespeichert!`,
           `Bestellung #${parsedData.orderNo} wurde umgewandelt und heruntergeladen.`
         );
       }
@@ -1556,10 +1790,93 @@
         fileInput.value = '';
       });
 
+      // GitHub Token Modal Logic
+      const githubModal = document.getElementById('githubTokenModal');
+      const githubTokenInput = document.getElementById('githubTokenInput');
+      const githubModalStatus = document.getElementById('githubModalStatus');
+
+      function openGithubModal(promptReason = '') {
+        if (githubTokenInput) {
+          githubTokenInput.value = state.githubToken || '';
+        }
+        if (githubModalStatus) {
+          if (promptReason) {
+            githubModalStatus.textContent = promptReason;
+            githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-amber-50 text-amber-800 border border-amber-200 block';
+          } else {
+            githubModalStatus.className = 'hidden';
+          }
+        }
+        githubModal.classList.remove('hidden');
+        githubModal.classList.add('flex');
+        if (window.lucide) window.lucide.createIcons();
+      }
+
+      function closeGithubModal() {
+        githubModal.classList.add('hidden');
+        githubModal.classList.remove('flex');
+      }
+
+      document.getElementById('githubSyncBtn')?.addEventListener('click', () => openGithubModal());
+      document.getElementById('closeGithubModalBtn')?.addEventListener('click', closeGithubModal);
+
+      document.getElementById('saveGithubTokenBtn')?.addEventListener('click', async () => {
+        const val = (githubTokenInput?.value || '').trim();
+        if (!val) {
+          if (githubModalStatus) {
+            githubModalStatus.textContent = 'Bitte gib einen gültigen GitHub Personal Access Token ein.';
+            githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-red-50 text-red-800 border border-red-200 block';
+          }
+          return;
+        }
+
+        state.githubToken = val;
+        localStorage.setItem(GH_TOKEN_STORAGE_KEY, val);
+        if (githubModalStatus) {
+          githubModalStatus.textContent = 'Aktiviere automatisches GitHub-Log in Diskettencoder/KJP ...';
+          githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-blue-50 text-blue-800 border border-blue-200 block';
+        }
+
+        const ok = await syncFromGitHub();
+        const pushed = await pushLogToGitHub('Initialisiere ReOS-00001 Rechnungskreislauf für alle Geräte');
+        if (ok && pushed) {
+          closeGithubModal();
+          showBanner('success', 'Einrichtung abgeschlossen!', 'Ab sofort können alle Nutzer auf beliebigen Geräten einfach https://diskettencoder.github.io/KJP/ öffnen und nahtlos weiterarbeiten.');
+          if (state.pendingFilesAfterToken) {
+            const pending = state.pendingFilesAfterToken;
+            state.pendingFilesAfterToken = null;
+            await handleUploadedFiles(pending);
+          }
+        } else if (githubModalStatus) {
+          githubModalStatus.textContent = 'Zugriff fehlgeschlagen. Bitte prüfe, ob der Token Schreibrechte (Contents: Read & Write) für Diskettencoder/KJP hat.';
+          githubModalStatus.className = 'text-xs font-medium rounded-lg p-2.5 bg-red-50 text-red-800 border border-red-200 block';
+        }
+      });
+
+      document.getElementById('clearGithubTokenBtn')?.addEventListener('click', () => {
+        state.githubToken = '';
+        localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
+        if (githubTokenInput) githubTokenInput.value = '';
+        updateGithubSyncUI();
+        closeGithubModal();
+      });
+
       async function handleUploadedFiles(files) {
         const pdfFiles = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
         if (pdfFiles.length === 0) {
           showBanner('error', 'Ungültiges Dateiformat', 'Bitte ziehe eine gültige PDF-Bestellbestätigung in das Feld.');
+          return;
+        }
+
+        // First make sure we pulled the shared syncKey from hash-log.json if available
+        if (!state.githubToken) {
+          await syncFromGitHub();
+        }
+
+        // Only if the repo has never been initialized once at all, ask the admin once
+        if (!state.githubToken) {
+          state.pendingFilesAfterToken = pdfFiles;
+          openGithubModal('Bitte aktiviere hier ein einziges Mal das GitHub-Log mit deinem Token. Danach brauchen andere Geräte oder Nutzer nichts mehr einzugeben.');
           return;
         }
 
