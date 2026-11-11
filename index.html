@@ -887,28 +887,50 @@
     }
 
     /**
+     * Strips dynamic download timestamps (e.g. "2026/11/11 09:28:23" or "11.11.2026")
+     * that SumUp injects at the moment of downloading the receipt PDF.
+     */
+    function stripDynamicTimestamps(str) {
+      return String(str || '')
+        .replace(/\b\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\b/g, ' ')
+        .replace(/\b\d{1,2}\.\d{1,2}\.\d{2,4}\b/g, ' ')
+        .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ');
+    }
+
+    /**
      * Computes a set of deterministic hashes for a receipt so that duplicate detection
-     * works 100% reliably across Windows, macOS, iOS, Android, Chrome, Safari, and Firefox:
-     * 1. `semanticHash`: Based on parsed order number, date, gross total, shipping, tax, and item prices.
-     * 2. `canonicalTextHash`: Based on pure alphanumeric stream (ignores PDF.js canvas font-metric chunking & spaces).
-     * 3. `sortedTokenHash`: Based on sorted alphanumeric tokens (ignores PDF text block ordering differences).
-     * 4. `legacyHash`: Previous pipe-joined token hash for backward compatibility with older entries.
+     * works 100% reliably across Windows, macOS, iOS, Android, Chrome, Safari, and Firefox —
+     * even if the receipt PDF is downloaded from SumUp on a different day or time:
+     * 1. `semanticHash`: Based on order number, customer/address, gross total, shipping, tax, and item prices (NO date!).
+     * 2. `fromPaymentHash`: Content starting from "Zahlungsmethode" onwards (excluding header timestamp).
+     * 3. `canonicalTextHash`: Pure alphanumeric stream with all timestamps stripped.
+     * 4. `sortedTokenHash`: Sorted alphanumeric tokens with all timestamps stripped.
      */
     async function computeReceiptHashes(rawTokens, allLines, parsedData) {
-      // 1. Legacy hash (for backward compatibility)
-      const legacyNormalized = rawTokens
-        .map(t => String(t).trim().replace(/\s+/g, ' '))
-        .filter(Boolean)
-        .join('|')
-        .toLowerCase();
-      const legacyHash = await sha256Hex(legacyNormalized);
+      // Strip dynamic download dates/times from tokens and lines
+      const timelessTokens = rawTokens
+        .map(t => stripDynamicTimestamps(t).trim())
+        .filter(Boolean);
+      const timelessLines = allLines
+        .map(l => stripDynamicTimestamps(l).trim())
+        .filter(Boolean);
 
-      // 2. Canonical continuous alphanumeric stream (immune to space/chunk splits like "1 x" vs "1x")
-      const canonicalStream = rawTokens.map(normalizeAsciiAlnum).join('');
+      // 1. Content from "Zahlungsmethode" onwards (+ order number), ignoring the top timestamp block
+      const fullTimelessText = timelessLines.join('\n');
+      const paymentIdx = fullTimelessText.toLowerCase().indexOf('zahlungsmethode');
+      const bodyFromPayment = paymentIdx !== -1
+        ? fullTimelessText.slice(paymentIdx)
+        : fullTimelessText;
+      const fromPaymentHash = await sha256Hex(
+        `ord:${normalizeAsciiAlnum(parsedData.orderNo)}|` + normalizeAsciiAlnum(bodyFromPayment)
+      );
+
+      // 2. Canonical continuous alphanumeric stream without timestamps
+      const canonicalStream = timelessTokens.map(normalizeAsciiAlnum).join('');
       const canonicalTextHash = await sha256Hex(canonicalStream);
 
-      // 3. Sorted bag of alphanumeric tokens (immune to Y/X coordinate float sorting differences)
-      const allWords = allLines
+      // 3. Sorted bag of alphanumeric tokens without timestamps
+      const allWords = timelessLines
         .join(' ')
         .normalize('NFC')
         .toLowerCase()
@@ -919,12 +941,23 @@
         .match(/[a-z0-9]+/g) || [];
       const sortedTokenHash = await sha256Hex([...allWords].sort().join('|'));
 
-      // 4. Semantic receipt fingerprint (immune to all PDF rendering differences)
+      // 4. Semantic receipt fingerprint WITHOUT orderDate (immune to re-downloading on another day)
       const itemFingerprints = (parsedData.items || [])
         .map(it => `${it.qty}x${Number(it.unitGross).toFixed(2)}=${Number(it.totalGross).toFixed(2)}`)
         .sort()
         .join(';');
-      const semanticRaw = [
+      const semanticTimelessRaw = [
+        `ord:${normalizeAsciiAlnum(parsedData.orderNo)}`,
+        `cust:${normalizeAsciiAlnum(parsedData.customerName)}`,
+        `tot:${Number(parsedData.totalGross).toFixed(2)}`,
+        `ship:${Number(parsedData.shippingGross).toFixed(2)}`,
+        `tax:${Number(parsedData.taxAmount).toFixed(2)}`,
+        `items:${itemFingerprints}`
+      ].join('|');
+      const semanticHash = await sha256Hex(semanticTimelessRaw);
+
+      // Keep legacy date-included semantic hash only as a secondary fallback for already-saved entries
+      const legacyDatedSemanticRaw = [
         `ord:${normalizeAsciiAlnum(parsedData.orderNo)}`,
         `date:${parsedData.orderDate}`,
         `tot:${Number(parsedData.totalGross).toFixed(2)}`,
@@ -932,11 +965,18 @@
         `tax:${Number(parsedData.taxAmount).toFixed(2)}`,
         `items:${itemFingerprints}`
       ].join('|');
-      const semanticHash = await sha256Hex(semanticRaw);
+      const legacyDatedSemanticHash = await sha256Hex(legacyDatedSemanticRaw);
 
       const hasValidOrderData = parsedData && (parsedData.items?.length > 0 || parsedData.totalGross > 0);
-      const primaryHash = hasValidOrderData ? semanticHash : canonicalTextHash;
-      const allHashes = Array.from(new Set([primaryHash, semanticHash, canonicalTextHash, sortedTokenHash, legacyHash]));
+      const primaryHash = hasValidOrderData ? semanticHash : fromPaymentHash;
+      const allHashes = Array.from(new Set([
+        primaryHash,
+        semanticHash,
+        fromPaymentHash,
+        canonicalTextHash,
+        sortedTokenHash,
+        legacyDatedSemanticHash
+      ]));
 
       return {
         primaryHash,
