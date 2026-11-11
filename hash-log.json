@@ -1,60 +1,44 @@
 {
   "version": 3,
-  "updatedAt": "2026-11-11T09:48:43.548Z",
+  "updatedAt": "2026-11-11T10:03:28.293Z",
   "prefix": "ReOS-",
   "nextNumber": 5,
   "syncKey": "v1:077f131d2036781f17067a6572090434260a2905333a2434754d473a03316f0630251c6c456a670432211657343a3a1b2b4726777f4b3910320e173a19256a45594a4c266a4d14066f122d2a430d657b007a0a100b133507141f72",
   "entries": [
     {
       "hash": "cd930dadd9be0dc07da4825ec52f6a4d145d456d6620154eb35bde31cf0afa9b",
+      "invoiceNumber": "ReOS-00001",
+      "numericNo": 1,
       "altHashes": [
-        "cd930dadd9be0dc07da4825ec52f6a4d145d456d6620154eb35bde31cf0afa9b",
         "c4f26362fc5ed977ab7fc1d72460f245e725550e4ae8b3a7ba8c6cdabd04ddb5",
         "c10656633c6ce10a948e2223379aeb4ba8e7ccc50f30c1fe9e6a25d6b91dfbf4",
         "5bb1f0cd51c44099043693b7b28997edf125a2fd197c1d11de2f27014366c645"
-      ],
-      "invoiceNumber": "ReOS-00001",
-      "numericNo": 1
+      ]
     },
     {
-      "hash": "28d9adc9fac20e7b3dee26a4db66be057ac24c10e3a0ecc269dd208aabea66f3",
-      "altHashes": [
-        "28d9adc9fac20e7b3dee26a4db66be057ac24c10e3a0ecc269dd208aabea66f3",
-        "97e2241533537abac771a96c021423970ce35369261e9142c7d23e56e0478f50",
-        "f0ee69cc95f905c6ad9a68d95c787e0aa0e67538e80c6e5a4ff29be38ed0ee7b",
-        "bbd99813993eb42044767ccaf9d133e53e5c03f5f1b32437d67351aeb9d3b610",
-        "dcbe396336d85d7a35304faaf1fecb8ce8fa7e9f6ba832778db5b65793d04541",
-        "daf13c07d9075bdf538db022ffac058b74aef21a90658cd526361db28ac2b960",
-        "53eb3c6679a0d38b355d99b3b332e2e30de239b8cd1837cb8f398388a8d311c0",
-        "e54bbb08b6b8f0047f1a1a31ddf76c229363f738496e2503345dba66ad9558d3",
-        "7e1f59efabebd30ca31e2c14b0b127a09defd5208e4f631d985b9660ec31f512",
-        "d3158d08f731ddbe42a5675843dfafa35ac71985d04e1d75756019b1f5d3c8d5",
-        "f52f0662c8fed21cd832e4662098b4b54fa750b015b1402982c3416711917d78"
-      ],
+      "hash": "e54bbb08b6b8f0047f1a1a31ddf76c229363f738496e2503345dba66ad9558d3",
       "invoiceNumber": "ReOS-00002",
       "numericNo": 2
     },
     {
       "hash": "f04586881ae4e6bcf4bbb6406041e59133b1c51d0503c874eadebb1db3741fd2",
+      "invoiceNumber": "ReOS-00003",
+      "numericNo": 3,
       "altHashes": [
-        "f04586881ae4e6bcf4bbb6406041e59133b1c51d0503c874eadebb1db3741fd2",
         "11208875aa448a7dc97fab6782fdb6b34bc328f2fa0ef5af10a05823a815fbbf",
         "663adbcb04bf4f94c4d36b66f93fa62777736690d4eb543a176e2255c3f3c61c",
         "0da3e8c710ed1938c809455824ee198551f45829480a023466c7e1113a95c202"
-      ],
-      "invoiceNumber": "ReOS-00003",
-      "numericNo": 3
+      ]
     },
     {
       "hash": "13295cad363b4a240e2021d7149ce8902620c9815b90f4a08291b7d65716ce92",
+      "invoiceNumber": "ReOS-00004",
+      "numericNo": 4,
       "altHashes": [
-        "13295cad363b4a240e2021d7149ce8902620c9815b90f4a08291b7d65716ce92",
         "e04f23c0751078d7042f307f6635129e1e5f0aa2ece6052a8b038fac2ea398c5",
         "cd0499d997820a59df5b4a05fcf2df115976482b8a6fdca4f610b3dae13e88d1",
         "0a013a6d152aee0c77d4f49901c2fd35a60bb0254c0520081451d0101d1e6bf4"
-      ],
-      "invoiceNumber": "ReOS-00004",
-      "numericNo": 4
+      ]
     }
   ]
 }
