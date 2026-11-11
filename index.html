@@ -1231,7 +1231,16 @@
       const now = new Date();
       const todayFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
 
+      // Strict check: Only accept genuine SumUp receipts where order number, customer/address, items, and total were extracted
+      const isValidReceipt = Boolean(
+        orderNo &&
+        (customerName || addressLines.length > 0) &&
+        items.length > 0 &&
+        totalGross > 0
+      );
+
       return {
+        isValidReceipt,
         orderNo: orderNo || 'Unbekannt',
         invoiceDate: todayFormatted,
         orderDate: orderDate || todayFormatted,
@@ -2121,11 +2130,25 @@
             const buffer = await file.arrayBuffer();
             const { allLines, rawContentTokensForHash } = await extractLinesFromPdfBuffer(buffer);
             const parsedData = parseReceiptTextLines(allLines);
+
+            if (!parsedData.isValidReceipt) {
+              showBanner(
+                'error',
+                `Rechnungsdaten konnten nicht ausgelesen werden (${file.name})`,
+                'Bitte lade ausschließlich unveränderte Original-SumUp-Belege als PDF hoch (keine Scans, Fotos oder andere Dokumente). Falls du einen korrekten SumUp-Beleg hochgeladen hast, kontaktiere bitte Jan über Sabine Ahrens-Eipper.'
+              );
+              continue;
+            }
+
             const hashBundle = await computeReceiptHashes(rawContentTokensForHash, allLines, parsedData);
             await processReceiptData(parsedData, hashBundle, file.name);
           } catch (err) {
             console.error('Fehler beim Lesen der PDF:', err);
-            showBanner('error', `Fehler bei ${file.name}`, 'Die PDF-Datei konnte nicht ausgelesen werden.');
+            showBanner(
+              'error',
+              `Fehler beim Lesen von ${file.name}`,
+              'Bitte lade ausschließlich unveränderte Original-SumUp-Belege als PDF hoch (keine Scans oder beschädigten Dateien). Falls du einen korrekten SumUp-Beleg hochgeladen hast, kontaktiere bitte Jan über Sabine Ahrens-Eipper.'
+            );
           }
         }
       }
