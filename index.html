@@ -335,7 +335,7 @@
       },
       customLogoDataUrl: null,
       logoAspectRatio: 360 / 160,
-      // STRICT PRIVACY: Stores ONLY { hash, altHashes, invoiceNumber, numericNo }
+      // STRICT PRIVACY: Stores ONLY { hash, invoiceNumber, numericNo, invoiceDate }
       hashRegistry: new Map(),
       githubFileSha: null,
       githubToken: localStorage.getItem(GH_TOKEN_STORAGE_KEY) || '',
@@ -518,9 +518,6 @@
             if (num < START_INVOICE_NUMBER) continue;
 
             const primaryHash = String(item.hash).trim();
-            const altList = Array.isArray(item.altHashes)
-              ? item.altHashes.map(h => String(h).trim()).filter(h => h && h !== primaryHash)
-              : [];
 
             // Check if we already have an entry for this invoiceNumber
             let existingKey = null;
@@ -534,11 +531,9 @@
             const sanitized = {
               hash: primaryHash,
               invoiceNumber: formatInvoiceNo(INVOICE_PREFIX, num),
-              numericNo: num
+              numericNo: num,
+              invoiceDate: String(item.invoiceDate || '').trim()
             };
-            if (altList.length > 0) {
-              sanitized.altHashes = Array.from(new Set(altList));
-            }
 
             if (existingKey && existingKey !== primaryHash) {
               state.hashRegistry.delete(existingKey);
@@ -558,8 +553,7 @@
     }
 
     /**
-     * Searches `state.hashRegistry` for any entry matching ANY of the candidate hashes
-     * (cross-device semantic hash, canonical text hash, sorted token bag hash, or legacy hash).
+     * Searches `state.hashRegistry` for any entry matching the receipt hash.
      * If multiple entries match, returns the one with the lowest invoice number.
      */
     function findMatchingRegistryEntry(candidateHashes) {
@@ -568,9 +562,7 @@
       let bestMatch = null;
 
       for (const entry of state.hashRegistry.values()) {
-        const entryHashes = [entry.hash, ...(Array.isArray(entry.altHashes) ? entry.altHashes : [])];
-        const isMatch = entryHashes.some(h => candidateSet.has(h));
-        if (isMatch) {
+        if (candidateSet.has(entry.hash)) {
           if (!bestMatch || entry.numericNo < bestMatch.numericNo) {
             bestMatch = entry;
           }
@@ -595,17 +587,12 @@
         const payload = {
           prefix: state.presets.prefix,
           nextNumber: state.presets.nextNumber,
-          entries: Array.from(state.hashRegistry.values()).map(e => {
-            const item = {
-              hash: e.hash,
-              invoiceNumber: e.invoiceNumber,
-              numericNo: e.numericNo
-            };
-            if (Array.isArray(e.altHashes) && e.altHashes.length > 0) {
-              item.altHashes = e.altHashes;
-            }
-            return item;
-          })
+          entries: Array.from(state.hashRegistry.values()).map(e => ({
+            hash: e.hash,
+            invoiceNumber: e.invoiceNumber,
+            numericNo: e.numericNo,
+            invoiceDate: e.invoiceDate
+          }))
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
       } catch (e) {
@@ -760,7 +747,7 @@
 
       const buildPayload = () => {
         const fileData = {
-          version: 3,
+          version: 4,
           updatedAt: new Date().toISOString(),
           prefix: INVOICE_PREFIX,
           nextNumber: state.presets.nextNumber,
@@ -768,17 +755,12 @@
           entries: Array.from(state.hashRegistry.values())
             .filter(e => String(e.invoiceNumber).startsWith(INVOICE_PREFIX))
             .sort((a, b) => a.numericNo - b.numericNo)
-            .map(e => {
-              const item = {
-                hash: e.hash,
-                invoiceNumber: e.invoiceNumber,
-                numericNo: e.numericNo
-              };
-              if (Array.isArray(e.altHashes) && e.altHashes.length > 0) {
-                item.altHashes = e.altHashes;
-              }
-              return item;
-            })
+            .map(e => ({
+              hash: e.hash,
+              invoiceNumber: e.invoiceNumber,
+              numericNo: e.numericNo,
+              invoiceDate: e.invoiceDate
+            }))
         };
         const body = {
           message: commitReason,
@@ -853,11 +835,12 @@
         state.hashRegistry.delete(entry.oldHashKey);
       }
 
-      // Store ONLY the single current hash without any altHashes bloat
+      // Store ONLY the single current hash, invoiceNumber, numericNo, and original invoiceDate
       const minimalEntry = {
         hash: String(entry.hash),
         invoiceNumber: String(entry.invoiceNumber),
-        numericNo: Number(entry.numericNo)
+        numericNo: Number(entry.numericNo),
+        invoiceDate: String(entry.invoiceDate)
       };
 
       state.hashRegistry.set(minimalEntry.hash, minimalEntry);
@@ -960,17 +943,6 @@
       ].join('|');
       const semanticHash = await sha256Hex(semanticTimelessRaw);
 
-      // Keep legacy date-included semantic hash only as a secondary fallback for already-saved entries
-      const legacyDatedSemanticRaw = [
-        `ord:${normalizeAsciiAlnum(parsedData.orderNo)}`,
-        `date:${parsedData.orderDate}`,
-        `tot:${Number(parsedData.totalGross).toFixed(2)}`,
-        `ship:${Number(parsedData.shippingGross).toFixed(2)}`,
-        `tax:${Number(parsedData.taxAmount).toFixed(2)}`,
-        `items:${itemFingerprints}`
-      ].join('|');
-      const legacyDatedSemanticHash = await sha256Hex(legacyDatedSemanticRaw);
-
       const hasValidOrderData = parsedData && (parsedData.items?.length > 0 || parsedData.totalGross > 0);
       const primaryHash = hasValidOrderData ? semanticHash : fromPaymentHash;
       const allHashes = Array.from(new Set([
@@ -978,13 +950,11 @@
         semanticHash,
         fromPaymentHash,
         canonicalTextHash,
-        sortedTokenHash,
-        legacyDatedSemanticHash
+        sortedTokenHash
       ]));
 
       return {
         primaryHash,
-        altHashes: allHashes,
         allHashes
       };
     }
@@ -1463,48 +1433,40 @@
 
       let assignedInvoiceNo = '';
       let assignedNumericNo = 0;
+      let assignedInvoiceDate = parsedData.invoiceDate;
       let isDuplicate = false;
 
       const matchedEntry = findMatchingRegistryEntry(allHashes);
 
       if (matchedEntry) {
-        // DUPLICATE CONTENT DETECTED (across any device/browser!) -> Jump back to original invoice number!
+        // DUPLICATE CONTENT DETECTED -> Jump back to original invoice number AND original invoice date!
         assignedInvoiceNo = matchedEntry.invoiceNumber;
         assignedNumericNo = matchedEntry.numericNo;
+        assignedInvoiceDate = matchedEntry.invoiceDate;
         isDuplicate = true;
-
-        // Clean up legacy hash or altHashes array as soon as the current primaryHash is known
-        const hasLegacyAltHashes = Array.isArray(matchedEntry.altHashes) && matchedEntry.altHashes.length > 0;
-        if (matchedEntry.hash !== primaryHash || hasLegacyAltHashes) {
-          await saveHashMapping({
-            oldHashKey: matchedEntry.hash,
-            hash: primaryHash,
-            invoiceNumber: assignedInvoiceNo,
-            numericNo: assignedNumericNo
-          });
-        }
 
         showBanner(
           'warning',
           `Bereits erstellter Beleg erkannt (${sourceLabel})`,
-          `Für dieses Dokument wurde bereits eine Rechnung generiert. Es wurde automatisch auf die ursprüngliche Rechnungsnummer ${assignedInvoiceNo} zurückgesprungen.`
+          `Für dieses Dokument wurde bereits am ${assignedInvoiceDate} die Rechnung ${assignedInvoiceNo} generiert. Rechnungsnummer und ursprüngliches Rechnungsdatum wurden wiederhergestellt.`
         );
       } else {
-        // NEW RECEIPT -> Assign next chronological invoice number (starting at ReOS-00001)
+        // NEW RECEIPT -> Assign next chronological invoice number & lock in today's invoiceDate forever
         assignedNumericNo = Math.max(START_INVOICE_NUMBER, state.presets.nextNumber);
         assignedInvoiceNo = formatInvoiceNo(state.presets.prefix, assignedNumericNo);
+        assignedInvoiceDate = parsedData.invoiceDate;
         state.presets.nextNumber = assignedNumericNo + 1;
 
-        // STRICT PRIVACY & COMPACT JSON: Store ONLY the single primaryHash and invoiceNumber!
         await saveHashMapping({
           hash: primaryHash,
           invoiceNumber: assignedInvoiceNo,
-          numericNo: assignedNumericNo
+          numericNo: assignedNumericNo,
+          invoiceDate: assignedInvoiceDate
         });
 
         showBanner(
           'success',
-          `Rechnung ${assignedInvoiceNo} erstellt & gespeichert!`,
+          `Rechnung ${assignedInvoiceNo} (${assignedInvoiceDate}) erstellt & gespeichert!`,
           `Bestellung #${parsedData.orderNo} wurde umgewandelt und heruntergeladen.`
         );
       }
@@ -1515,6 +1477,7 @@
       state.currentInvoice = {
         ...parsedData,
         invoiceNumber: assignedInvoiceNo,
+        invoiceDate: assignedInvoiceDate,
         contentHash: primaryHash,
         isDuplicate,
         manualTaxSolution: taxSolveResult.unique ? taxSolveResult.solution : null
