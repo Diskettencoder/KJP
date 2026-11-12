@@ -8,72 +8,86 @@
     {
       "hash": "4f87d4aee9f4badac2f1a36a051c17370518adc3a6cb93abbdd9af2a55f946c1",
       "invoiceNumber": "ReOS-00001",
-      "numericNo": 1
+      "numericNo": 1,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "e54bbb08b6b8f0047f1a1a31ddf76c229363f738496e2503345dba66ad9558d3",
       "invoiceNumber": "ReOS-00002",
-      "numericNo": 2
+      "numericNo": 2,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "48e2103b7eebf55aab5055f879142fabaae2a96dd1ebb781ab85185dc2e644b7",
       "invoiceNumber": "ReOS-00003",
-      "numericNo": 3
+      "numericNo": 3,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "f4525a2b57ad5453daea8aa091a45b8f5c7eede4cc38c80eee7cc3834f8521b1",
       "invoiceNumber": "ReOS-00004",
-      "numericNo": 4
+      "numericNo": 4,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "6cda87b9410d57583b535f3d02258b06b74c028e548c55d94e393ebc84265409",
       "invoiceNumber": "ReOS-00005",
-      "numericNo": 5
+      "numericNo": 5,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "d72a264c6589d72417ea70066ac73d206d83a5c83975df0ff34df947896acdc8",
       "invoiceNumber": "ReOS-00006",
-      "numericNo": 6
+      "numericNo": 6,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "078bb1134e03bb0ca115499dc7acdfd5768b0fdc5e614ba590699a35fa086f60",
       "invoiceNumber": "ReOS-00007",
-      "numericNo": 7
+      "numericNo": 7,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "85b057ebc6a06db8ae2daa7348b2463f630639887d73e075481f45bb3e997c4e",
       "invoiceNumber": "ReOS-00008",
-      "numericNo": 8
+      "numericNo": 8,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "f3be49f4ecaffd958689f9a63e830c67e0ae0fc6da1b2a1af1c21b3ee5bfa7c0",
       "invoiceNumber": "ReOS-00009",
-      "numericNo": 9
+      "numericNo": 9,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "9c55955eca87c3c7e3a5550619676c6e7f7e0e1b367dfbc2cc45f086b8a9175f",
       "invoiceNumber": "ReOS-00010",
-      "numericNo": 10
+      "numericNo": 10,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "96fff0e199f7bc7e786a0a56e3aca594b749075b4d12548b64b489d34fc791d5",
       "invoiceNumber": "ReOS-00011",
-      "numericNo": 11
+      "numericNo": 11,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "0472366d1a97504cadd4452dee510e5dc072cf640d81320481a28c628ecadd3e",
       "invoiceNumber": "ReOS-00012",
-      "numericNo": 12
+      "numericNo": 12,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "b54fb968b4ffbac960fb0f617a1a4bffa56ae28851956411f5b6747664eeebb5",
       "invoiceNumber": "ReOS-00013",
-      "numericNo": 13
+      "numericNo": 13,
+      "invoiceDate": "11.11.2026"
     },
     {
       "hash": "f657eeea564af8b901b75a7a7401d42cce63726a82dc4a24397702df09f7c034",
       "invoiceNumber": "ReOS-00014",
-      "numericNo": 14
+      "numericNo": 14,
+      "invoiceDate": "11.11.2026"
     }
   ]
 }
